@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
 # ============================================================================
 # LinkedPilot v2 - VPS Setup Script for AlmaLinux 8
-# Installs Python 3.11, Ollama + Phi-3, Nginx, fail2ban, and configures
-# the AI comment server as a systemd service.
+#
+# YOUR VPS:
+#   OS       : AlmaLinux 8.10
+#   RAM      : 3.6 GB (Ollama ke liye enough)
+#   Nginx    : Already running (80, 443, 4568) — we only ADD a config
+#   Postgres : Running on 127.0.0.1:5432 — NOT touched
+#   PM2/Node : Running on :3000 — NOT touched
+#   Firewall : Disabled — we do NOT enable it (would break existing services)
+#   Python   : 3.6.8 only — we install 3.11
+#   Ollama   : Not installed — we install it
+#
+# App Location: /var/www/linkedpilot-ai/
+# Port        : 8443 (free)
 #
 # Usage: sudo bash setup_vps.sh
 # ============================================================================
 
 set -euo pipefail
 
-APP_DIR="/opt/linkedpilot-ai"
+APP_DIR="/var/www/linkedpilot-ai"
 APP_USER="linkedpilot"
 SSL_DIR="/etc/nginx/ssl"
 VENV_DIR="${APP_DIR}/venv"
@@ -28,13 +39,13 @@ require_root() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. System packages
+# 1. System packages (Python 3.11 only — Nginx already installed)
 # ---------------------------------------------------------------------------
 
 install_system_packages() {
     info "Installing system packages..."
 
-    # Enable EPEL and PowerTools/CRB for extra packages
+    # Enable EPEL and PowerTools for Python 3.11
     if ! dnf repolist enabled | grep -q epel; then
         dnf install -y epel-release
     fi
@@ -50,21 +61,11 @@ install_system_packages() {
         ok "Python 3.11 already installed."
     fi
 
-    # Nginx
-    if ! command -v nginx &>/dev/null; then
-        info "Installing Nginx..."
-        dnf install -y nginx
+    # Verify Nginx is already running (we don't install it)
+    if command -v nginx &>/dev/null; then
+        ok "Nginx already installed — will NOT reinstall."
     else
-        ok "Nginx already installed."
-    fi
-
-    # fail2ban
-    if ! command -v fail2ban-server &>/dev/null; then
-        info "Installing fail2ban..."
-        dnf install -y fail2ban
-        systemctl enable --now fail2ban
-    else
-        ok "fail2ban already installed."
+        err "Nginx not found! This script expects Nginx to be already running."
     fi
 
     ok "System packages ready."
@@ -87,19 +88,19 @@ install_ollama() {
     # Ensure the Ollama service is running
     systemctl enable --now ollama
 
-    # Pull model (idempotent - Ollama skips if already present)
-    info "Pulling phi3:mini model (this may take a while)..."
+    # Pull model (idempotent — Ollama skips if already present)
+    info "Pulling phi3:mini model (this may take a while ~2.3 GB)..."
     ollama pull phi3:mini
 
     ok "Ollama + phi3:mini ready."
 }
 
 # ---------------------------------------------------------------------------
-# 3. Application user and directory
+# 3. Application user and directory (/var/www/linkedpilot-ai/)
 # ---------------------------------------------------------------------------
 
 setup_app_dir() {
-    info "Setting up application directory..."
+    info "Setting up application directory at ${APP_DIR}..."
 
     # Create service user (no login shell)
     if ! id "$APP_USER" &>/dev/null; then
@@ -130,7 +131,7 @@ setup_python_venv() {
 
     "$VENV_DIR/bin/pip" install \
         fastapi \
-        uvicorn[standard] \
+        'uvicorn[standard]' \
         httpx \
         python-dotenv \
         pydantic
@@ -143,7 +144,7 @@ setup_python_venv() {
 # ---------------------------------------------------------------------------
 
 copy_app_files() {
-    info "Copying application files..."
+    info "Copying application files to ${APP_DIR}..."
 
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -152,7 +153,7 @@ copy_app_files() {
     # Create .env from template if it does not already exist
     if [[ ! -f "$APP_DIR/.env" ]]; then
         cp "$SCRIPT_DIR/.env.example" "$APP_DIR/.env"
-        warn ".env created from template - you MUST set VPS_API_KEY before starting."
+        warn ".env created from template — you MUST set VPS_API_KEY before starting."
     else
         ok ".env already exists (not overwritten)."
     fi
@@ -160,11 +161,11 @@ copy_app_files() {
     chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
     chmod 600 "$APP_DIR/.env"
 
-    ok "Application files in place."
+    ok "Application files in place at $APP_DIR"
 }
 
 # ---------------------------------------------------------------------------
-# 6. Self-signed SSL certificate
+# 6. Self-signed SSL certificate for port 8443
 # ---------------------------------------------------------------------------
 
 setup_ssl() {
@@ -181,7 +182,7 @@ setup_ssl() {
         -newkey rsa:2048 \
         -keyout "$SSL_DIR/linkedpilot.key" \
         -out "$SSL_DIR/linkedpilot.crt" \
-        -subj "/CN=linkedpilot-ai/O=LinkedPilot/C=US"
+        -subj "/CN=linkedpilot-ai/O=LinkedPilot/C=IN"
 
     chmod 600 "$SSL_DIR/linkedpilot.key"
     chmod 644 "$SSL_DIR/linkedpilot.crt"
@@ -190,27 +191,30 @@ setup_ssl() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. Nginx configuration
+# 7. Nginx — ADD config (do NOT touch existing configs)
 # ---------------------------------------------------------------------------
 
 setup_nginx() {
-    info "Configuring Nginx..."
+    info "Adding LinkedPilot Nginx config..."
 
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    cp "$SCRIPT_DIR/nginx_linkedpilot.conf" /etc/nginx/conf.d/linkedpilot.conf
+    # Show existing configs for awareness
+    info "Existing Nginx configs (will NOT be modified):"
+    ls -1 /etc/nginx/conf.d/*.conf 2>/dev/null || true
 
-    # Remove default server block if it exists, to avoid port conflicts
-    if [[ -f /etc/nginx/conf.d/default.conf ]]; then
-        mv /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf.bak
-        warn "Renamed default.conf to default.conf.bak"
+    # Only add our config
+    cp "$SCRIPT_DIR/nginx_linkedpilot.conf" /etc/nginx/conf.d/linkedpilot.conf
+    ok "Added /etc/nginx/conf.d/linkedpilot.conf (port 8443)"
+
+    # Test config — if it fails, remove our file and abort
+    if ! nginx -t 2>&1; then
+        rm -f /etc/nginx/conf.d/linkedpilot.conf
+        err "Nginx config test FAILED! Removed linkedpilot.conf. Fix and retry."
     fi
 
-    nginx -t || err "Nginx configuration test failed!"
-    systemctl enable --now nginx
     systemctl reload nginx
-
-    ok "Nginx configured and running."
+    ok "Nginx reloaded — port 8443 active. Existing sites untouched."
 }
 
 # ---------------------------------------------------------------------------
@@ -226,43 +230,18 @@ setup_systemd() {
     systemctl daemon-reload
     systemctl enable linkedpilot-ai
 
-    ok "Systemd service installed (not started yet - set API key first)."
+    ok "Systemd service installed (not started yet — set API key first)."
 }
 
 # ---------------------------------------------------------------------------
-# 9. Firewall
-# ---------------------------------------------------------------------------
-
-setup_firewall() {
-    info "Configuring firewall..."
-
-    if ! command -v firewall-cmd &>/dev/null; then
-        warn "firewalld not found, skipping firewall setup."
-        return
-    fi
-
-    systemctl enable --now firewalld
-
-    # Only allow SSH (22) and our API port (8443)
-    firewall-cmd --permanent --add-service=ssh         2>/dev/null || true
-    firewall-cmd --permanent --add-port=8443/tcp       2>/dev/null || true
-
-    # Remove common default services we do not need
-    firewall-cmd --permanent --remove-service=dhcpv6-client 2>/dev/null || true
-    firewall-cmd --permanent --remove-service=cockpit       2>/dev/null || true
-
-    firewall-cmd --reload
-
-    ok "Firewall configured: ports 22 (SSH) and 8443 (API) open."
-}
-
-# ---------------------------------------------------------------------------
-# Main
+# Main (NO firewall step — firewalld is disabled on this VPS)
 # ---------------------------------------------------------------------------
 
 main() {
     echo "=============================================="
-    echo "  LinkedPilot v2 - VPS Setup (AlmaLinux 8)"
+    echo "  LinkedPilot v2 — VPS Setup (AlmaLinux 8)"
+    echo "  Location: /var/www/linkedpilot-ai/"
+    echo "  Port:     8443"
     echo "=============================================="
 
     require_root
@@ -275,29 +254,40 @@ main() {
     setup_ssl
     setup_nginx
     setup_systemd
-    setup_firewall
 
     echo ""
     echo "=============================================="
     echo "  Setup Complete!"
     echo "=============================================="
     echo ""
+    echo "  YOUR VPS FOLDER STRUCTURE:"
+    echo "    /var/www/linkedpilot-ai/"
+    echo "    ├── ai_server.py"
+    echo "    ├── .env            ← API key set karo"
+    echo "    └── venv/"
+    echo ""
+    echo "  EXISTING SERVICES — UNTOUCHED:"
+    echo "    /var/www/email1/"
+    echo "    /var/www/email_verifier/"
+    echo "    /var/www/emailverifierphp/"
+    echo "    /var/www/misservicesinc.com/"
+    echo ""
     echo "  NEXT STEPS:"
     echo ""
-    echo "  1. Set your API key:"
-    echo "       nano /opt/linkedpilot-ai/.env"
-    echo "       # Change VPS_API_KEY=changeme_to_a_random_64char_secret"
+    echo "  1. API key generate + set karo:"
+    echo "       python3.11 -c \"import secrets; print(secrets.token_hex(32))\""
+    echo "       nano /var/www/linkedpilot-ai/.env"
     echo ""
-    echo "  2. Update the Nginx IP whitelist:"
+    echo "  2. Nginx IP whitelist update karo:"
     echo "       nano /etc/nginx/conf.d/linkedpilot.conf"
-    echo "       # Replace CHANGE_TO_LAPTOP_IP with your laptop's public IP"
+    echo "       # CHANGE_TO_LAPTOP_IP → apna public IP dalo"
     echo "       systemctl reload nginx"
     echo ""
-    echo "  3. Start the AI server:"
+    echo "  3. Start karo:"
     echo "       systemctl start linkedpilot-ai"
     echo "       systemctl status linkedpilot-ai"
     echo ""
-    echo "  4. Test the health endpoint:"
+    echo "  4. Test karo:"
     echo "       curl -k https://localhost:8443/health"
     echo ""
     echo "=============================================="

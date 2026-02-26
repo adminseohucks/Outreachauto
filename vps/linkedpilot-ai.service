@@ -1,6 +1,5 @@
 [Unit]
 Description=LinkedPilot AI Comment Server
-Documentation=https://github.com/linkedpilot
 After=network.target ollama.service
 Wants=ollama.service
 
@@ -8,9 +7,9 @@ Wants=ollama.service
 Type=simple
 User=linkedpilot
 Group=linkedpilot
-WorkingDirectory=/opt/linkedpilot-ai
-EnvironmentFile=/opt/linkedpilot-ai/.env
-ExecStart=/opt/linkedpilot-ai/venv/bin/uvicorn ai_server:app --host 0.0.0.0 --port 8000 --workers 1
+WorkingDirectory=/var/www/linkedpilot-ai
+EnvironmentFile=/var/www/linkedpilot-ai/.env
+ExecStart=/var/www/linkedpilot-ai/venv/bin/uvicorn ai_server:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -22,7 +21,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/linkedpilot-ai
+ReadWritePaths=/var/www/linkedpilot-ai
 
 [Install]
 WantedBy=multi-user.target

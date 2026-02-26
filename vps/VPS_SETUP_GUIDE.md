@@ -1,230 +1,204 @@
 # LinkedPilot v2 — VPS AI Server Setup Guide
 
-## Overview
+## Your VPS Info
 
-The VPS AI server runs **Ollama + Phi-3 Mini** to intelligently select the best
-predefined comment for each LinkedIn post. When the VPS is unreachable, the
-dashboard falls back to random comment selection automatically.
+| Item | Value |
+|------|-------|
+| OS | AlmaLinux 8.10 |
+| IP | 50.6.202.231 |
+| RAM | 3.6 GB (2.4 GB free) |
+| Disk | 99 GB (79 GB free) |
+| Nginx | Running (ports 80, 443, 4568) |
+| PostgreSQL | Running (127.0.0.1:5432) |
+| PM2/Node | Running (port 3000) |
+| Python | 3.6.8 (need 3.11) |
+| Firewall | Disabled |
 
-### Architecture
+## What We Install (Kya lagayenge)
+
+| Service | Location | Port |
+|---------|----------|------|
+| LinkedPilot AI | `/var/www/linkedpilot-ai/` | 8000 (internal) |
+| Nginx config | `/etc/nginx/conf.d/linkedpilot.conf` | 8443 (SSL) |
+| Ollama | system-wide | 11434 (internal) |
+| Phi-3 Mini model | `~/.ollama/models/` | — |
+
+## What We Do NOT Touch
 
 ```
-Laptop (Dashboard)                    VPS (AlmaLinux 8)
-┌─────────────────┐    HTTPS:8443    ┌──────────────────────────┐
-│  Scheduler      │ ───────────────→ │  Nginx (SSL + IP filter) │
-│  ai_comment.py  │  HMAC-SHA256     │     ↓ proxy :8000        │
-│                 │ ←─────────────── │  FastAPI  ai_server.py   │
-└─────────────────┘                  │     ↓ localhost:11434     │
-                                     │  Ollama  phi3:mini       │
-                                     └──────────────────────────┘
+/var/www/email1/               ← untouched
+/var/www/email_verifier/       ← untouched
+/var/www/emailverifierphp/     ← untouched
+/var/www/misservicesinc.com/   ← untouched
+/etc/nginx/conf.d/emailverifier.conf    ← untouched
+/etc/nginx/conf.d/misservicesinc.conf   ← untouched
+PostgreSQL on :5432            ← untouched
+PM2/Node on :3000              ← untouched
+firewalld                      ← stays disabled
 ```
-
-**Security layers:** HMAC-SHA256 auth → IP whitelist → SSL → rate limiting → fail2ban
 
 ---
 
-## Prerequisites
+## Step-by-Step Commands
 
-| Item | Requirement |
-|------|-------------|
-| VPS | AlmaLinux 8 / CentOS 8 / Rocky Linux 8 (2+ GB RAM, 10+ GB disk) |
-| Access | Root SSH access |
-| Laptop IP | Your public IP (`curl -s ifconfig.me`) |
+### Step 1: Upload files to VPS
 
-> **RAM Note:** Phi-3 Mini needs ~2 GB. If VPS has only 1 GB, the model will
-> swap heavily. Consider a VPS with 2-4 GB RAM.
-
----
-
-## Step 1: Upload VPS Files to Server
-
-From your laptop (in the project root):
+From your **laptop** (project root):
 
 ```bash
-# Upload the entire vps/ folder to your server
-scp -r vps/ root@YOUR_VPS_IP:/root/linkedpilot-setup/
+scp -r vps/ root@50.6.202.231:/root/linkedpilot-setup/
 ```
 
----
-
-## Step 2: Run the Setup Script
-
-SSH into your VPS and run:
+### Step 2: SSH into VPS and run setup
 
 ```bash
-ssh root@YOUR_VPS_IP
+ssh root@50.6.202.231
 cd /root/linkedpilot-setup
 chmod +x setup_vps.sh
-sudo bash setup_vps.sh
+bash setup_vps.sh
 ```
 
-This installs:
-- Python 3.11 + venv
-- Ollama + phi3:mini model (~2.3 GB download)
-- Nginx (reverse proxy on port 8443 with SSL)
-- fail2ban (brute-force protection)
-- Self-signed SSL certificate (10-year validity)
-- Systemd service (`linkedpilot-ai`)
-- Firewall rules (ports 22 + 8443 only)
+This will:
+- Install Python 3.11 (via dnf)
+- Install Ollama + download phi3:mini (~2.3 GB)
+- Create `/var/www/linkedpilot-ai/` with venv
+- Generate self-signed SSL cert
+- Add Nginx config on port 8443
+- Install systemd service
 
----
-
-## Step 3: Generate & Set API Key
+### Step 3: Generate API key
 
 ```bash
-# Generate a strong 64-char random key
 python3.11 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-**Copy that key**, then set it in TWO places:
+Copy the output (64-char hex string).
 
-### 3a. On the VPS
-
-```bash
-nano /opt/linkedpilot-ai/.env
-```
-
-```
-VPS_API_KEY=<paste-your-64-char-key-here>
-```
-
-### 3b. On the Dashboard (laptop)
+### Step 4: Set API key on VPS
 
 ```bash
-nano dashboard/.env
+nano /var/www/linkedpilot-ai/.env
 ```
 
+Paste:
 ```
-VPS_AI_URL=https://YOUR_VPS_IP:8443/api/suggest-comment
-VPS_API_KEY=<paste-same-64-char-key-here>
-VPS_HEALTH_URL=https://YOUR_VPS_IP:8443/health
-VPS_SSL_VERIFY=false
+VPS_API_KEY=<your-64-char-key>
 ```
 
-> Both keys MUST match exactly. HMAC authentication will fail otherwise.
-
----
-
-## Step 4: Set Your Laptop IP in Nginx
+### Step 5: Set your laptop IP in Nginx
 
 ```bash
-# Find your laptop's public IP
+# Find laptop IP (run on laptop)
 curl -s ifconfig.me
 
-# Edit Nginx config on VPS
+# Edit on VPS
 nano /etc/nginx/conf.d/linkedpilot.conf
 ```
 
-Find this line:
+Change:
 ```
 allow CHANGE_TO_LAPTOP_IP;
 ```
-
-Replace with your actual IP:
+To:
 ```
-allow 103.XX.XX.XX;
+allow YOUR.LAPTOP.IP.HERE;
 ```
 
-Then reload:
+Then:
 ```bash
 nginx -t && systemctl reload nginx
 ```
 
----
-
-## Step 5: Start the AI Server
+### Step 6: Start the AI server
 
 ```bash
 systemctl start linkedpilot-ai
 systemctl status linkedpilot-ai
 ```
 
-Check logs:
+### Step 7: Test
+
 ```bash
-journalctl -u linkedpilot-ai -f
+# From VPS
+curl -k https://localhost:8443/health
+
+# From laptop
+curl -k https://50.6.202.231:8443/health
 ```
+
+Expected response:
+```json
+{"status":"ok","model":"phi3:mini","uptime_seconds":5.2}
+```
+
+### Step 8: Set API key on Dashboard (laptop)
+
+Edit `dashboard/.env`:
+```
+VPS_AI_URL=https://50.6.202.231:8443/api/suggest-comment
+VPS_API_KEY=<same-64-char-key>
+VPS_HEALTH_URL=https://50.6.202.231:8443/health
+VPS_SSL_VERIFY=false
+```
+
+Then go to Dashboard Settings page → "Test Connection" → should show green.
 
 ---
 
-## Step 6: Verify Everything Works
+## VPS Folder Structure After Setup
 
-### From the VPS itself:
-```bash
-curl -k https://localhost:8443/health
 ```
+/var/www/
+├── email1/                  ← existing (untouched)
+├── email_verifier/          ← existing (untouched)
+├── emailverifierphp/        ← existing (untouched)
+├── misservicesinc.com/      ← existing (untouched)
+└── linkedpilot-ai/          ← NEW
+    ├── ai_server.py
+    ├── .env
+    └── venv/
+        └── bin/uvicorn
 
-Expected:
-```json
-{"status":"ok","model":"phi3:mini","uptime_seconds":42.5}
+/etc/nginx/conf.d/
+├── emailverifier.conf       ← existing (untouched)
+├── misservicesinc.conf      ← existing (untouched)
+└── linkedpilot.conf         ← NEW (port 8443 only)
+
+/etc/systemd/system/
+└── linkedpilot-ai.service   ← NEW
 ```
-
-### From your laptop:
-```bash
-curl -k https://YOUR_VPS_IP:8443/health
-```
-
-### From the Dashboard UI:
-1. Go to **Settings** page
-2. Click **Test Connection**
-3. Should show green status with latency
 
 ---
 
 ## Troubleshooting
 
-### Connection refused / timeout
-
+### Service not starting
 ```bash
-# Check if services are running
-systemctl status linkedpilot-ai
-systemctl status nginx
+journalctl -u linkedpilot-ai -n 50 --no-pager
 systemctl status ollama
-
-# Check firewall
-firewall-cmd --list-ports
-# Should show: 8443/tcp
-
-# Check Nginx is listening
-ss -tlnp | grep 8443
-```
-
-### HMAC auth fails (401 errors)
-
-```bash
-# Verify keys match
-cat /opt/linkedpilot-ai/.env       # VPS key
-cat dashboard/.env                  # Dashboard key (must match)
-
-# Check time sync (timestamp tolerance is 300 seconds)
-date -u                            # VPS time
-# vs your laptop's UTC time
 ```
 
 ### Ollama not responding
-
 ```bash
-# Check Ollama service
-systemctl status ollama
-ollama list                        # Should show phi3:mini
-
-# Test Ollama directly
-curl http://localhost:11434/api/generate -d '{
-  "model": "phi3:mini",
-  "prompt": "Say hello",
-  "stream": false
-}'
+systemctl restart ollama
+ollama list
+curl http://localhost:11434/api/generate -d '{"model":"phi3:mini","prompt":"hello","stream":false}'
 ```
 
-### Nginx 403 Forbidden (IP not whitelisted)
-
+### Nginx 403 (IP not whitelisted)
 ```bash
-# Check your current IP
+# Check current IP
 curl -s ifconfig.me
-
-# Update whitelist
+# Update
 nano /etc/nginx/conf.d/linkedpilot.conf
-# Update the "allow" line
-systemctl reload nginx
+nginx -t && systemctl reload nginx
+```
+
+### HMAC auth fails (401)
+```bash
+# Keys must match exactly
+cat /var/www/linkedpilot-ai/.env     # VPS key
+# vs dashboard/.env                   # laptop key
 ```
 
 ---
@@ -232,53 +206,19 @@ systemctl reload nginx
 ## Useful Commands
 
 ```bash
-# Service management
+# Manage services
 systemctl start|stop|restart linkedpilot-ai
 systemctl start|stop|restart ollama
-systemctl start|stop|restart nginx
 
-# View logs
-journalctl -u linkedpilot-ai --since "1 hour ago"
+# Logs
+journalctl -u linkedpilot-ai -f
 journalctl -u ollama -f
+
+# Update ai_server.py
+scp vps/ai_server.py root@50.6.202.231:/var/www/linkedpilot-ai/
+ssh root@50.6.202.231 "chown linkedpilot:linkedpilot /var/www/linkedpilot-ai/ai_server.py && systemctl restart linkedpilot-ai"
 
 # Check Ollama models
 ollama list
-ollama pull phi3:mini             # Re-pull if needed
-
-# Disk usage
-du -sh /usr/share/ollama          # Ollama models directory
-
-# Update API key
-nano /opt/linkedpilot-ai/.env
-systemctl restart linkedpilot-ai
-```
-
----
-
-## How AI Comment Selection Works
-
-When a comment campaign runs:
-
-1. **Scheduler** picks up a comment action from the queue
-2. **Browser** navigates to the lead's profile and extracts the latest post text
-3. **AI Client** sends post text + all active predefined comments to VPS
-4. **VPS AI** (Phi-3) analyzes the post and picks the most relevant comment
-5. **Fallback:** If VPS is unreachable, a random predefined comment is used
-6. **Browser** types the selected comment with human-like keystrokes
-
-The entire flow is automated — no manual intervention needed after campaign start.
-
----
-
-## Updating the AI Server
-
-When you update `ai_server.py`:
-
-```bash
-# From laptop
-scp vps/ai_server.py root@YOUR_VPS_IP:/opt/linkedpilot-ai/ai_server.py
-
-# On VPS
-chown linkedpilot:linkedpilot /opt/linkedpilot-ai/ai_server.py
-systemctl restart linkedpilot-ai
+ollama pull phi3:mini
 ```
