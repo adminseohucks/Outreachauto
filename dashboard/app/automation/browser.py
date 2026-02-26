@@ -75,7 +75,11 @@ class BrowserManager:
             locale="en-US",
             timezone_id="Asia/Kolkata",
             user_agent=CHROME_USER_AGENT,
-            ignore_default_args=["--enable-automation"],
+            ignore_default_args=[
+                "--enable-automation",
+                "--no-sandbox",
+                "--disable-extensions",
+            ],
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
@@ -264,11 +268,18 @@ class ExtensionChromeManager:
             f"--user-data-dir={profile}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--enable-extensions",
             "https://www.linkedin.com/login",
         ]
 
+        # Clean environment: remove Playwright/Chromium vars that could leak
+        clean_env = {
+            k: v for k, v in os.environ.items()
+            if not any(x in k.upper() for x in ("PLAYWRIGHT", "CHROMIUM", "CHROME_FLAGS"))
+        }
+
         try:
-            proc = subprocess.Popen(cmd)
+            proc = subprocess.Popen(cmd, env=clean_env)
             self._processes[sender_id] = proc
             logger.info(
                 "Extension Chrome opened for sender %s (pid %s, profile %s)",
