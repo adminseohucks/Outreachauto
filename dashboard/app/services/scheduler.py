@@ -11,6 +11,13 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from app.database import get_lp_db
+from app.config import (
+    LIKE_MIN_DELAY,
+    LIKE_MAX_DELAY,
+    COMMENT_MIN_DELAY,
+    COMMENT_MAX_DELAY,
+    CONTACT_COOLDOWN_DAYS,
+)
 from app.services.rate_limiter import (
     check_limit,
     check_work_hours,
@@ -23,9 +30,12 @@ logger = logging.getLogger(__name__)
 # IST is UTC+5:30
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Random delay bounds (seconds) between actions to look human
-MIN_DELAY = 30
-MAX_DELAY = 120
+
+def _delay_bounds(action_type: str) -> tuple[int, int]:
+    """Return (min_delay, max_delay) in seconds for the given action type."""
+    if action_type == "comment":
+        return COMMENT_MIN_DELAY, COMMENT_MAX_DELAY
+    return LIKE_MIN_DELAY, LIKE_MAX_DELAY
 
 
 # ---------------------------------------------------------------------------
@@ -187,12 +197,14 @@ class CampaignScheduler:
             )
             await db.commit()
 
-            # ---- 2. Get pending actions (with company page name if set) ----
+            # ---- 2. Get pending actions (with company page name and lead info) ----
             cursor = await db.execute(
                 """
-                SELECT aq.*, cp.page_name AS company_page_name
+                SELECT aq.*, cp.page_name AS company_page_name,
+                       cll.profile_url, cll.full_name AS lead_name
                 FROM action_queue aq
                 LEFT JOIN company_pages cp ON aq.company_page_id = cp.id
+                LEFT JOIN custom_list_leads cll ON aq.lead_id = cll.id
                 WHERE aq.campaign_id = ? AND aq.status = 'pending'
                 ORDER BY aq.id ASC
                 """,
@@ -228,6 +240,7 @@ class CampaignScheduler:
                 sender_id = action.get("sender_id")
                 action_type = action.get("action_type", "like")
                 profile_url = action.get("profile_url", "")
+                _lead_name = action.get("lead_name", "")
 
                 # ---- 3a. Check work hours ----
                 while not await check_work_hours():
@@ -252,10 +265,14 @@ class CampaignScheduler:
                         "UPDATE action_queue SET status = 'skipped' WHERE id = ?",
                         (action_id,),
                     )
+                    await db.execute(
+                        "UPDATE campaigns SET processed = processed + 1, skipped = skipped + 1 WHERE id = ?",
+                        (campaign_id,),
+                    )
                     await db.commit()
                     await self._log_activity(
                         campaign_id, sender_id, action_type, profile_url,
-                        "skipped", limit_result["reason"],
+                        "skipped", limit_result["reason"], lead_name=_lead_name,
                     )
                     continue
 
@@ -269,10 +286,14 @@ class CampaignScheduler:
                         "UPDATE action_queue SET status = 'skipped' WHERE id = ?",
                         (action_id,),
                     )
+                    await db.execute(
+                        "UPDATE campaigns SET processed = processed + 1, skipped = skipped + 1 WHERE id = ?",
+                        (campaign_id,),
+                    )
                     await db.commit()
                     await self._log_activity(
                         campaign_id, sender_id, action_type, profile_url,
-                        "skipped", "Cooldown active",
+                        "skipped", "Cooldown active", lead_name=_lead_name,
                     )
                     continue
 
@@ -297,19 +318,31 @@ class CampaignScheduler:
                 )
                 await db.commit()
 
+                # Update campaign progress counters
+                stat_col = "successful" if success else "failed"
+                await db.execute(
+                    f"UPDATE campaigns SET processed = processed + 1, {stat_col} = {stat_col} + 1 WHERE id = ?",
+                    (campaign_id,),
+                )
+                await db.commit()
+
                 if success:
                     await increment_counter(sender_id, action_type)
+                    # Record in global_contact_registry for cross-sender cooldown
+                    await self._record_cooldown(profile_url, sender_id, action_type)
 
                 # ---- 3e cont. Log to activity_log ----
                 company_page = action.get("company_page_name", "")
+                lead_name = action.get("lead_name", "")
                 detail_msg = f"as {company_page}" if company_page else ""
                 await self._log_activity(
                     campaign_id, sender_id, action_type, profile_url,
-                    new_status, detail_msg,
+                    new_status, detail_msg, lead_name=lead_name,
                 )
 
-                # ---- 3f. Random delay ----
-                delay = random.uniform(MIN_DELAY, MAX_DELAY)
+                # ---- 3f. Random delay based on action type ----
+                min_d, max_d = _delay_bounds(action_type)
+                delay = random.uniform(min_d, max_d)
                 logger.debug("Sleeping %.1f seconds before next action.", delay)
                 await asyncio.sleep(delay)
 
@@ -350,6 +383,37 @@ class CampaignScheduler:
         self._tasks.pop(campaign_id, None)
         self._pause_flags.pop(campaign_id, None)
 
+    async def _record_cooldown(
+        self,
+        profile_url: str,
+        sender_id: int,
+        action_type: str,
+    ) -> None:
+        """Insert/update a row in global_contact_registry for cross-sender cooldown."""
+        if not profile_url:
+            return
+        try:
+            db = await get_lp_db()
+            now = datetime.now(IST).isoformat()
+            cooldown_until = (
+                datetime.now(IST) + timedelta(days=CONTACT_COOLDOWN_DAYS)
+            ).isoformat()
+
+            await db.execute(
+                """
+                INSERT INTO global_contact_registry
+                    (profile_url, sender_id, action_type, acted_at, cooldown_until)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(profile_url, sender_id, action_type)
+                DO UPDATE SET acted_at = ?, cooldown_until = ?
+                """,
+                (profile_url, sender_id, action_type, now, cooldown_until,
+                 now, cooldown_until),
+            )
+            await db.commit()
+        except Exception as exc:
+            logger.error("Failed to record cooldown: %s", exc)
+
     async def _log_activity(
         self,
         campaign_id: int,
@@ -358,6 +422,7 @@ class CampaignScheduler:
         lead_url: str,
         status: str,
         details: str,
+        lead_name: str = "",
     ) -> None:
         """Insert a row into the activity_log table."""
         try:
@@ -375,10 +440,10 @@ class CampaignScheduler:
             await db.execute(
                 """
                 INSERT INTO activity_log
-                    (action_type, sender_id, sender_name, lead_url, campaign_id, status, details)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (action_type, sender_id, sender_name, lead_name, lead_url, campaign_id, status, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (action_type, sender_id, sender_name, lead_url, campaign_id, status, details),
+                (action_type, sender_id, sender_name, lead_name, lead_url, campaign_id, status, details),
             )
             await db.commit()
         except Exception as exc:

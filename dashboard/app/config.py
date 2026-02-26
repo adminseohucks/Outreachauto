@@ -61,6 +61,13 @@ MAX_SENDERS = _int("MAX_SENDERS", 4)
 
 # --- Global cooldown (days) ---
 CONTACT_COOLDOWN_DAYS = 3
+COOLDOWN_HOURS = CONTACT_COOLDOWN_DAYS * 24  # 72 hours
+
+# --- Aliases used by rate_limiter and weekly_planner ---
+DAILY_LIKE_LIMIT = LIKE_DAILY_LIMIT
+DAILY_COMMENT_LIMIT = COMMENT_DAILY_LIMIT
+WEEKLY_LIKE_LIMIT = LIKE_WEEKLY_LIMIT
+WEEKLY_COMMENT_LIMIT = COMMENT_WEEKLY_LIMIT
 
 # --- Templates / Static ---
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"

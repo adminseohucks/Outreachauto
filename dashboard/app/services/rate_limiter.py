@@ -235,7 +235,7 @@ async def check_cooldown(profile_url: str, sender_id: int) -> bool:
         """
         SELECT COUNT(*) as cnt
         FROM global_contact_registry
-        WHERE profile_url = ? AND last_action_at >= ?
+        WHERE profile_url = ? AND acted_at >= ?
         """,
         (profile_url, cooldown_since),
     )
