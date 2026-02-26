@@ -1,8 +1,11 @@
 """LinkedPilot v2 — Database connections and schema init."""
 
+import logging
 import aiosqlite
 from pathlib import Path
 from app.config import LINKEDPILOT_DB_PATH, CRM_DB_PATH
+
+logger = logging.getLogger(__name__)
 
 _lp_db: aiosqlite.Connection | None = None
 _crm_db: aiosqlite.Connection | None = None
@@ -159,6 +162,29 @@ CREATE INDEX IF NOT EXISTS idx_dc_date ON daily_counters(date, sender_id);
 """
 
 
+async def _safe_add_column(db: aiosqlite.Connection, table: str, column: str, definition: str) -> None:
+    """Add a column to an existing table if it doesn't already exist."""
+    try:
+        cursor = await db.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if column not in columns:
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            logger.info("Added column %s.%s", table, column)
+    except Exception as exc:
+        logger.debug("Column %s.%s may already exist: %s", table, column, exc)
+
+
+async def _run_migrations(db: aiosqlite.Connection) -> None:
+    """Run migrations for existing databases that need new columns/tables."""
+    # company_page_id on campaigns table
+    await _safe_add_column(db, "campaigns", "company_page_id",
+                           "INTEGER DEFAULT NULL REFERENCES company_pages(id)")
+    # company_page_id on action_queue table
+    await _safe_add_column(db, "action_queue", "company_page_id",
+                           "INTEGER DEFAULT NULL REFERENCES company_pages(id)")
+    await db.commit()
+
+
 async def get_lp_db() -> aiosqlite.Connection:
     """Get LinkedPilot database connection (read/write)."""
     global _lp_db
@@ -169,6 +195,7 @@ async def get_lp_db() -> aiosqlite.Connection:
         await _lp_db.execute("PRAGMA journal_mode=WAL")
         await _lp_db.execute("PRAGMA foreign_keys=ON")
         await _lp_db.executescript(SCHEMA_SQL)
+        await _run_migrations(_lp_db)
         await _lp_db.commit()
     return _lp_db
 
