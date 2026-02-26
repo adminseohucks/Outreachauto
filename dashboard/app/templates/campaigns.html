@@ -36,13 +36,25 @@
             </label>
             <label>
                 Sender
-                <select name="sender_id" required>
+                <select name="sender_id" id="campaign-sender-select" required>
                     <option value="" disabled selected>Select a sender</option>
                     {% for s in senders %}
                     <option value="{{ s.id }}">{{ s.name }}</option>
                     {% endfor %}
                 </select>
             </label>
+        </fieldset>
+        <fieldset>
+            <label>
+                Act As
+                <select name="company_page_id" id="campaign-act-as">
+                    <option value="0">Personal Profile (default)</option>
+                    {% for pg in company_pages|default([]) %}
+                    <option value="{{ pg.id }}" data-sender-id="{{ pg.sender_id }}">{{ pg.sender_name }} → {{ pg.page_name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <small>Select a company page to like/comment as that page instead of your personal profile.</small>
         </fieldset>
         <button type="submit">Create Campaign</button>
     </form>
@@ -72,7 +84,7 @@
                 <td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td>
                 <td><span class="badge badge-{{ 'blue' if c.campaign_type == 'like' else 'orange' }}">{{ c.campaign_type }}</span></td>
                 <td>{{ c.list_name or '—' }}</td>
-                <td>{{ c.sender_name or '—' }}</td>
+                <td>{{ c.sender_name or '—' }}{% if c.company_page_name %}<br><small style="color: var(--lp-accent);">as {{ c.company_page_name }}</small>{% endif %}</td>
                 <td><span class="badge badge-{{ c.status }}">{{ c.status }}</span></td>
                 <td>
                     {% set pct = ((c.processed / c.total_leads * 100) | round(0) | int) if c.total_leads > 0 else 0 %}

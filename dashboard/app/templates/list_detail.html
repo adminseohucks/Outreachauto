@@ -128,6 +128,15 @@
                 {% endfor %}
             </select>
 
+            <label for="campaign-act-as">Act As</label>
+            <select id="campaign-act-as" name="company_page_id">
+                <option value="0">Personal Profile (default)</option>
+                {% for pg in company_pages|default([]) %}
+                <option value="{{ pg.id }}">{{ pg.sender_name }} → {{ pg.page_name }}</option>
+                {% endfor %}
+            </select>
+            <small>Select a company page to like/comment as that page.</small>
+
             <fieldset>
                 <legend>Campaign Type</legend>
                 <label>

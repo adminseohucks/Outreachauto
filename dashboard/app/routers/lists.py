@@ -73,11 +73,24 @@ async def list_detail(request: Request, list_id: int):
     )
     senders = [dict(row) for row in await cursor.fetchall()]
 
+    # Get company pages for campaign creation "Act As" dropdown
+    cursor = await db.execute(
+        """
+        SELECT cp.id, cp.sender_id, cp.page_name, s.name AS sender_name
+        FROM company_pages cp
+        JOIN senders s ON cp.sender_id = s.id
+        WHERE cp.is_active = 1 AND s.status = 'active'
+        ORDER BY s.name, cp.page_name
+        """
+    )
+    company_pages = [dict(row) for row in await cursor.fetchall()]
+
     return templates.TemplateResponse("list_detail.html", {
         "request": request,
         "list": lst,
         "leads": leads,
         "senders": senders,
+        "company_pages": company_pages,
         "active_page": "lists",
     })
 

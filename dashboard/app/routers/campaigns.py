@@ -19,10 +19,12 @@ async def campaigns_page(request: Request):
     db = await get_lp_db()
     cursor = await db.execute(
         """
-        SELECT c.*, cl.name AS list_name, s.name AS sender_name
+        SELECT c.*, cl.name AS list_name, s.name AS sender_name,
+               cp.page_name AS company_page_name
         FROM campaigns c
         LEFT JOIN custom_lists cl ON c.list_id = cl.id
         LEFT JOIN senders s ON c.sender_id = s.id
+        LEFT JOIN company_pages cp ON c.company_page_id = cp.id
         ORDER BY c.created_at DESC
         """
     )
@@ -39,11 +41,24 @@ async def campaigns_page(request: Request):
     )
     senders = [dict(row) for row in await cursor.fetchall()]
 
+    # Get company pages grouped by sender for the "Act As" dropdown
+    cursor = await db.execute(
+        """
+        SELECT cp.id, cp.sender_id, cp.page_name, s.name AS sender_name
+        FROM company_pages cp
+        JOIN senders s ON cp.sender_id = s.id
+        WHERE cp.is_active = 1 AND s.status = 'active'
+        ORDER BY s.name, cp.page_name
+        """
+    )
+    company_pages = [dict(row) for row in await cursor.fetchall()]
+
     return templates.TemplateResponse("campaigns.html", {
         "request": request,
         "campaigns": campaigns,
         "lists": lists,
         "senders": senders,
+        "company_pages": company_pages,
         "active_page": "campaigns",
     })
 
@@ -55,9 +70,13 @@ async def create_campaign(
     list_id: int = Form(...),
     sender_id: int = Form(...),
     campaign_type: str = Form(...),
+    company_page_id: int = Form(0),
 ):
     """Create a new campaign (draft status)."""
     db = await get_lp_db()
+
+    # company_page_id=0 means personal profile (no company page)
+    page_id = company_page_id if company_page_id > 0 else None
 
     # Get total leads in the list
     cursor = await db.execute(
@@ -69,10 +88,10 @@ async def create_campaign(
 
     cursor = await db.execute(
         """
-        INSERT INTO campaigns (name, list_id, sender_id, campaign_type, total_leads)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO campaigns (name, list_id, sender_id, company_page_id, campaign_type, total_leads)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (name, list_id, sender_id, campaign_type, total_leads),
+        (name, list_id, sender_id, page_id, campaign_type, total_leads),
     )
     await db.commit()
     campaign_id = cursor.lastrowid
@@ -88,10 +107,10 @@ async def create_campaign(
         await db.execute(
             """
             INSERT INTO action_queue
-                (campaign_id, lead_id, sender_id, action_type, status)
-            VALUES (?, ?, ?, ?, 'pending')
+                (campaign_id, lead_id, sender_id, company_page_id, action_type, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
             """,
-            (campaign_id, lead_id, sender_id, campaign_type),
+            (campaign_id, lead_id, sender_id, page_id, campaign_type),
         )
     await db.commit()
 

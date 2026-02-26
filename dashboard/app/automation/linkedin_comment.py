@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional
 from playwright.async_api import Page
 
 from . import human_delay
+from .page_identity import switch_comment_identity
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +142,12 @@ async def comment_on_latest_post(
     page: Page,
     profile_url: str,
     comment_text: str,
+    company_page_name: str | None = None,
 ) -> Dict[str, Any]:
     """Navigate to *profile_url*, find the latest post, and leave *comment_text*.
+
+    If *company_page_name* is given, switches the commenting identity to that
+    company page after opening the comment box.
 
     Returns
     -------
@@ -245,6 +250,17 @@ async def comment_on_latest_post(
         result["error"] = f"Failed to click Comment button: {exc}"
         logger.error(result["error"])
         return result
+
+    # ------------------------------------------------------------------
+    # 5b. Switch to company page identity if requested
+    # ------------------------------------------------------------------
+    if company_page_name:
+        switched = await switch_comment_identity(page, company_page_name)
+        if switched:
+            logger.info("Switched comment identity to '%s'", company_page_name)
+        else:
+            logger.warning("Could not switch to '%s' — commenting as personal profile", company_page_name)
+        await human_delay.random_delay(0.5, 1.0)
 
     # ------------------------------------------------------------------
     # 6. Type comment using human-like keystrokes

@@ -21,9 +21,14 @@ async def senders_page(request: Request):
     )
     senders = [dict(row) for row in await cursor.fetchall()]
 
-    # Add browser status to each sender
+    # Add browser status and company pages to each sender
     for sender in senders:
         sender["browser_open"] = browser_manager.is_open(sender["id"])
+        cursor = await db.execute(
+            "SELECT * FROM company_pages WHERE sender_id = ? ORDER BY page_name",
+            (sender["id"],),
+        )
+        sender["company_pages"] = [dict(row) for row in await cursor.fetchall()]
 
     return templates.TemplateResponse("senders.html", {
         "request": request,
@@ -196,4 +201,56 @@ async def check_login(request: Request, sender_id: int):
 async def close_browser(request: Request, sender_id: int):
     """Close the browser for this sender."""
     await browser_manager.close_context(sender_id)
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+# -----------------------------------------------------------------------
+# Company Pages — manage LinkedIn company pages linked to a sender
+# -----------------------------------------------------------------------
+
+@router.post("/senders/{sender_id}/pages/add")
+async def add_company_page(
+    request: Request,
+    sender_id: int,
+    page_name: str = Form(...),
+    page_url: str = Form(...),
+):
+    """Add a company page to a sender account."""
+    db = await get_lp_db()
+    page_url = page_url.rstrip("/")
+    try:
+        await db.execute(
+            "INSERT INTO company_pages (sender_id, page_name, page_url) VALUES (?, ?, ?)",
+            (sender_id, page_name, page_url),
+        )
+        await db.commit()
+    except Exception:
+        pass  # duplicate or FK error
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+@router.post("/senders/{sender_id}/pages/{page_id}/remove")
+async def remove_company_page(request: Request, sender_id: int, page_id: int):
+    """Remove a company page from a sender."""
+    db = await get_lp_db()
+    await db.execute(
+        "DELETE FROM company_pages WHERE id = ? AND sender_id = ?",
+        (page_id, sender_id),
+    )
+    await db.commit()
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+@router.post("/senders/{sender_id}/pages/{page_id}/toggle")
+async def toggle_company_page(request: Request, sender_id: int, page_id: int):
+    """Toggle a company page active/inactive."""
+    db = await get_lp_db()
+    await db.execute(
+        """
+        UPDATE company_pages SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END
+        WHERE id = ? AND sender_id = ?
+        """,
+        (page_id, sender_id),
+    )
+    await db.commit()
     return RedirectResponse(url="/senders", status_code=303)

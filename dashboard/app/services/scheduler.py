@@ -39,18 +39,27 @@ async def _execute_action(action: dict) -> bool:
     In production this will call the browser-automation engine. For now it
     simulates success after a short delay.
 
+    The action dict may contain:
+        - action_type: 'like' or 'comment'
+        - sender_id: which sender's browser to use
+        - profile_url: target LinkedIn profile
+        - company_page_name: if set, switch identity to this company page
+        - comment_text: text to post (for comment actions)
+
     Args:
-        action: Row dict from action_queue.
+        action: Row dict from action_queue (joined with company_pages).
 
     Returns:
         True on success, False on failure.
     """
+    company_page = action.get("company_page_name")
     logger.info(
-        "Executing %s action (id=%s) on %s for sender %s",
+        "Executing %s action (id=%s) on %s for sender %s%s",
         action.get("action_type"),
         action.get("id"),
         action.get("profile_url"),
         action.get("sender_id"),
+        f" as page '{company_page}'" if company_page else "",
     )
     # Simulate work
     await asyncio.sleep(random.uniform(2, 5))
@@ -178,12 +187,14 @@ class CampaignScheduler:
             )
             await db.commit()
 
-            # ---- 2. Get pending actions ----
+            # ---- 2. Get pending actions (with company page name if set) ----
             cursor = await db.execute(
                 """
-                SELECT * FROM action_queue
-                WHERE campaign_id = ? AND status = 'pending'
-                ORDER BY id ASC
+                SELECT aq.*, cp.page_name AS company_page_name
+                FROM action_queue aq
+                LEFT JOIN company_pages cp ON aq.company_page_id = cp.id
+                WHERE aq.campaign_id = ? AND aq.status = 'pending'
+                ORDER BY aq.id ASC
                 """,
                 (campaign_id,),
             )
@@ -290,9 +301,11 @@ class CampaignScheduler:
                     await increment_counter(sender_id, action_type)
 
                 # ---- 3e cont. Log to activity_log ----
+                company_page = action.get("company_page_name", "")
+                detail_msg = f"as {company_page}" if company_page else ""
                 await self._log_activity(
                     campaign_id, sender_id, action_type, profile_url,
-                    new_status, "",
+                    new_status, detail_msg,
                 )
 
                 # ---- 3f. Random delay ----

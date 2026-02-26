@@ -23,6 +23,17 @@ CREATE TABLE IF NOT EXISTS senders (
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Company pages linked to senders (for liking/commenting as a company page)
+CREATE TABLE IF NOT EXISTS company_pages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_id   INTEGER NOT NULL REFERENCES senders(id) ON DELETE CASCADE,
+    page_name   TEXT NOT NULL,
+    page_url    TEXT NOT NULL,
+    is_active   INTEGER DEFAULT 1,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(sender_id, page_url)
+);
+
 -- Global contact registry (cross-sender cooldown)
 CREATE TABLE IF NOT EXISTS global_contact_registry (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,6 +90,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     name            TEXT NOT NULL,
     list_id         INTEGER NOT NULL REFERENCES custom_lists(id),
     sender_id       INTEGER REFERENCES senders(id),
+    company_page_id INTEGER DEFAULT NULL REFERENCES company_pages(id),
     campaign_type   TEXT NOT NULL CHECK(campaign_type IN ('like','comment')),
     status          TEXT DEFAULT 'draft' CHECK(status IN ('draft','active','paused','completed','cancelled')),
     total_leads     INTEGER DEFAULT 0,
@@ -97,6 +109,7 @@ CREATE TABLE IF NOT EXISTS action_queue (
     campaign_id     INTEGER REFERENCES campaigns(id),
     lead_id         INTEGER NOT NULL REFERENCES custom_list_leads(id),
     sender_id       INTEGER REFERENCES senders(id),
+    company_page_id INTEGER DEFAULT NULL REFERENCES company_pages(id),
     action_type     TEXT NOT NULL CHECK(action_type IN ('like','comment')),
     status          TEXT DEFAULT 'pending' CHECK(status IN ('pending','scheduled','running','done','failed','skipped')),
     comment_text    TEXT DEFAULT NULL,

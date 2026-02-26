@@ -79,6 +79,59 @@
             <div id="login-status-{{ s.id }}" style="font-size: 0.8rem; margin-top: 0.4rem;"></div>
         </div>
 
+        <!-- Company Pages Section -->
+        <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--pico-card-sectioning-background-color, #f8f9fa); border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <strong style="font-size: 0.85rem;">Company Pages</strong>
+                <button type="button" class="outline" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;" onclick="openModal('add-page-modal-{{ s.id }}')">+ Add Page</button>
+            </div>
+            {% if s.company_pages %}
+                {% for pg in s.company_pages %}
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; font-size: 0.8rem; border-bottom: 1px solid rgba(0,0,0,0.05);">
+                    <div>
+                        <a href="{{ pg.page_url }}" target="_blank" rel="noopener" style="font-weight: 600;">{{ pg.page_name }}</a>
+                        {% if not pg.is_active %}<span class="badge badge-paused" style="font-size: 0.65rem; margin-left: 0.3rem;">inactive</span>{% endif %}
+                    </div>
+                    <div style="display: flex; gap: 0.3rem;">
+                        <form method="post" action="/senders/{{ s.id }}/pages/{{ pg.id }}/toggle" style="margin:0;">
+                            <button type="submit" class="outline" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">{{ 'Disable' if pg.is_active else 'Enable' }}</button>
+                        </form>
+                        <form method="post" action="/senders/{{ s.id }}/pages/{{ pg.id }}/remove" style="margin:0;" onsubmit="return confirm('Remove this page?')">
+                            <button type="submit" class="outline" style="font-size: 0.65rem; padding: 0.15rem 0.4rem; color: var(--lp-red); border-color: var(--lp-red);">Remove</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <small style="color: var(--lp-gray);">No company pages added. Add pages to like/comment as your company.</small>
+            {% endif %}
+        </div>
+
+        <!-- Add Company Page Modal (per sender) -->
+        <div class="modal-overlay" id="add-page-modal-{{ s.id }}">
+            <div class="modal-content" style="max-width: 420px;">
+                <header>
+                    <h3>Add Company Page</h3>
+                    <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('add-page-modal-{{ s.id }}')" type="button">&times;</button>
+                </header>
+                <form method="post" action="/senders/{{ s.id }}/pages/add">
+                    <label>
+                        Page Name
+                        <input type="text" name="page_name" placeholder="e.g. TechCorp Solutions" required>
+                    </label>
+                    <label>
+                        LinkedIn Company Page URL
+                        <input type="url" name="page_url" placeholder="https://www.linkedin.com/company/techcorp" required>
+                    </label>
+                    <small style="display: block; margin-bottom: 1rem;">You must be an admin of this page on LinkedIn for likes/comments to work as the page.</small>
+                    <fieldset class="grid">
+                        <button type="submit">Add Page</button>
+                        <button type="button" class="secondary" onclick="closeModal('add-page-modal-{{ s.id }}')">Cancel</button>
+                    </fieldset>
+                </form>
+            </div>
+        </div>
+
         <!-- Management buttons -->
         <div class="action-buttons" style="margin-top: 0.75rem;">
             <button class="outline" style="font-size: 0.8rem;" onclick="openEditModal({{ s.id }}, {{ s|tojson }})">Edit</button>

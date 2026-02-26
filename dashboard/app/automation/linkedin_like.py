@@ -12,6 +12,7 @@ from typing import Dict, Any
 from playwright.async_api import Page
 
 from . import human_delay
+from .page_identity import switch_like_identity
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,12 @@ LIKE_BUTTON_SELECTORS = [
 
 
 async def like_latest_post(
-    page: Page, profile_url: str
+    page: Page, profile_url: str, company_page_name: str | None = None,
 ) -> Dict[str, Any]:
     """Navigate to *profile_url*, find the latest post, and like it.
+
+    If *company_page_name* is given, attempts to switch the like identity
+    to that company page before clicking Like.
 
     Returns
     -------
@@ -171,6 +175,16 @@ async def like_latest_post(
         pass  # proceed to click
 
     # ------------------------------------------------------------------
+    # 6b. Switch to company page identity if requested
+    # ------------------------------------------------------------------
+    if company_page_name:
+        switched = await switch_like_identity(page, company_page_name, post_element)
+        if switched:
+            logger.info("Switched like identity to '%s'", company_page_name)
+        else:
+            logger.warning("Could not switch to '%s' — liking as personal profile", company_page_name)
+
+    # ------------------------------------------------------------------
     # 7. Click the Like button
     # ------------------------------------------------------------------
     try:
@@ -178,7 +192,7 @@ async def like_latest_post(
         await human_delay.random_delay(0.5, 1.5)
         await like_button.click()
         await human_delay.random_delay(1, 3)
-        logger.info("Liked latest post on %s", profile_url)
+        logger.info("Liked latest post on %s%s", profile_url, f" as {company_page_name}" if company_page_name else "")
     except Exception as exc:
         result["error"] = f"Failed to click Like button: {exc}"
         logger.error(result["error"])
