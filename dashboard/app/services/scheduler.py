@@ -26,6 +26,7 @@ from app.services.rate_limiter import (
     check_cooldown,
     increment_counter,
 )
+from app.services.ai_comment import ask_ai_for_comment
 
 logger = logging.getLogger(__name__)
 
@@ -100,11 +101,76 @@ async def _execute_action(action: dict) -> bool:
         return result.get("success", False)
 
     elif action_type == "comment":
-        from app.automation.linkedin_comment import comment_on_latest_post
+        from app.automation.linkedin_comment import (
+            comment_on_latest_post,
+            extract_post_text,
+        )
+
         comment_text = action.get("comment_text", "")
+
         if not comment_text:
-            logger.error("No comment_text for comment action %s", action.get("id"))
-            return False
+            # --- AI comment selection ---
+            # 1. Fetch all active predefined comments
+            db = await get_lp_db()
+            cursor = await db.execute(
+                "SELECT id, text FROM predefined_comments WHERE is_active = 1"
+            )
+            rows = await cursor.fetchall()
+            if hasattr(rows[0] if rows else None, "keys"):
+                comment_rows = [dict(r) for r in rows]
+            else:
+                comment_rows = [{"id": r[0], "text": r[1]} for r in rows] if rows else []
+
+            if not comment_rows:
+                logger.error(
+                    "No active predefined comments for action %s", action.get("id")
+                )
+                return False
+
+            candidates = [r["text"] for r in comment_rows]
+
+            # 2. Try extracting post text for smarter AI selection
+            post_text = ""
+            try:
+                extract_result = await extract_post_text(page, profile_url)
+                post_text = extract_result.get("post_text") or ""
+                if post_text:
+                    logger.info(
+                        "Extracted post text (%d chars) for AI comment selection",
+                        len(post_text),
+                    )
+            except Exception as exc:
+                logger.warning("Post text extraction failed: %s", exc)
+
+            # 3. Ask AI to pick best comment (falls back to random if VPS down)
+            ai_result = await ask_ai_for_comment(post_text, candidates)
+            comment_text = ai_result.get("comment_text", "")
+            confidence = ai_result.get("confidence", 0.0)
+            selected_idx = ai_result.get("selected_index", -1)
+
+            if not comment_text:
+                comment_text = random.choice(candidates)
+                logger.warning("AI returned empty — using random comment")
+
+            logger.info(
+                "Comment selected (confidence=%.2f): %.60s...",
+                confidence,
+                comment_text,
+            )
+
+            # 4. Update action_queue with selected comment + bump usage_count
+            action_id = action.get("id")
+            await db.execute(
+                "UPDATE action_queue SET comment_text = ? WHERE id = ?",
+                (comment_text, action_id),
+            )
+            if 0 <= selected_idx < len(comment_rows):
+                await db.execute(
+                    "UPDATE predefined_comments SET usage_count = usage_count + 1 WHERE id = ?",
+                    (comment_rows[selected_idx]["id"],),
+                )
+            await db.commit()
+
         result = await comment_on_latest_post(page, profile_url, comment_text, company_page)
         return result.get("success", False)
 
