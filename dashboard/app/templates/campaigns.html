@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Campaigns — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<hgroup>
+    <h2>Campaigns</h2>
+    <p>{{ campaigns|length }} campaign{{ 's' if campaigns|length != 1 else '' }}</p>
+</hgroup>
+
+<!-- Create Campaign button -->
+<details>
+    <summary role="button">+ New Campaign</summary>
+    <form method="post" action="/campaigns/create">
+        <fieldset class="grid">
+            <label>
+                Name
+                <input type="text" name="name" placeholder="Campaign name" required>
+            </label>
+            <label>
+                Type
+                <select name="campaign_type" required>
+                    <option value="like">Like</option>
+                    <option value="comment">Comment</option>
+                </select>
+            </label>
+        </fieldset>
+        <fieldset class="grid">
+            <label>
+                List
+                <select name="list_id" required>
+                    <option value="" disabled selected>Select a list</option>
+                    {% for lst in lists %}
+                    <option value="{{ lst.id }}">{{ lst.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Sender
+                <select name="sender_id" required>
+                    <option value="" disabled selected>Select a sender</option>
+                    {% for s in senders %}
+                    <option value="{{ s.id }}">{{ s.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </fieldset>
+        <button type="submit">Create Campaign</button>
+    </form>
+</details>
+
+{% if campaigns %}
+<figure>
+    <table class="data-table" role="grid">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>List</th>
+                <th>Sender</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Success</th>
+                <th>Fail</th>
+                <th>Skip</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in campaigns %}
+            <tr>
+                <td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td>
+                <td><span class="badge badge-{{ 'blue' if c.campaign_type == 'like' else 'orange' }}">{{ c.campaign_type }}</span></td>
+                <td>{{ c.list_name or '—' }}</td>
+                <td>{{ c.sender_name or '—' }}</td>
+                <td><span class="badge badge-{{ c.status }}">{{ c.status }}</span></td>
+                <td>
+                    {% set pct = ((c.processed / c.total_leads * 100) | round(0) | int) if c.total_leads > 0 else 0 %}
+                    <div class="progress-bar">
+                        <div class="progress-fill green" style="width: {{ pct }}%"></div>
+                    </div>
+                    <small>{{ c.processed }}/{{ c.total_leads }}</small>
+                </td>
+                <td>{{ c.successful }}</td>
+                <td>{{ c.failed }}</td>
+                <td>{{ c.skipped }}</td>
+                <td><small>{{ c.created_at[:10] if c.created_at else '—' }}</small></td>
+                <td>
+                    <div class="action-buttons">
+                        {% if c.status == 'draft' %}
+                        <form method="post" action="/campaigns/{{ c.id }}/start">
+                            <button type="submit" class="outline">Start</button>
+                        </form>
+                        {% elif c.status == 'active' %}
+                        <form method="post" action="/campaigns/{{ c.id }}/pause">
+                            <button type="submit" class="outline secondary">Pause</button>
+                        </form>
+                        {% elif c.status == 'paused' %}
+                        <form method="post" action="/campaigns/{{ c.id }}/start">
+                            <button type="submit" class="outline">Resume</button>
+                        </form>
+                        <form method="post" action="/campaigns/{{ c.id }}/cancel" onsubmit="return confirm('Cancel this campaign?')">
+                            <button type="submit" class="outline secondary">Cancel</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</figure>
+{% else %}
+<article>
+    <p>No campaigns yet. Create one above to get started.</p>
+</article>
+{% endif %}
+{% endblock %}

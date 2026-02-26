@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% set list_info = list_info if list_info is defined else list %}
+{% block title %}{{ list_info.name }} — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<section>
+    <hgroup>
+        <h2>{{ list_info.name }} <small>({{ leads|length }} leads)</small></h2>
+        {% if list_info.description %}
+        <p>{{ list_info.description }}</p>
+        {% endif %}
+    </hgroup>
+
+    <!-- Action buttons -->
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
+        <button onclick="openModal('upload-csv-modal')">Upload CSV</button>
+        <button class="secondary" onclick="openModal('campaign-modal'); document.getElementById('campaign-type-like').checked = true;">Start Like Campaign</button>
+        <button class="secondary" onclick="openModal('campaign-modal'); document.getElementById('campaign-type-comment').checked = true;">Start Comment Campaign</button>
+        <a href="/lists" role="button" class="outline secondary">Back to Lists</a>
+    </div>
+
+    <!-- Leads table -->
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Headline</th>
+                <th>Company</th>
+                <th>Location</th>
+                <th>Liked</th>
+                <th>Commented</th>
+                <th>Last Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for lead in leads %}
+            <tr>
+                <td>
+                    {% if lead.profile_url %}
+                    <a href="{{ lead.profile_url }}" target="_blank" rel="noopener">{{ lead.full_name }}</a>
+                    {% else %}
+                    {{ lead.full_name }}
+                    {% endif %}
+                </td>
+                <td>{{ lead.headline or '' }}</td>
+                <td>{{ lead.company or '' }}</td>
+                <td>{{ lead.location or '' }}</td>
+                <td>{% if lead.is_liked %}<span style="color: var(--lp-green);">&#10003;</span>{% else %}&mdash;{% endif %}</td>
+                <td>{% if lead.is_commented %}<span style="color: var(--lp-green);">&#10003;</span>{% else %}&mdash;{% endif %}</td>
+                <td>{{ lead.last_action_at[:16]|replace('T', ' ') if lead.last_action_at else '&mdash;' }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="7" style="text-align: center;">No leads in this list. Upload a CSV or add leads from the Lead Browser.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<!-- CSV Upload Modal -->
+<div class="modal-overlay" id="upload-csv-modal">
+    <div class="modal-content">
+        <header>
+            <h3>Upload CSV</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('upload-csv-modal')" type="button">&times;</button>
+        </header>
+        <form method="post" action="/lists/{{ list_info.id }}/upload-csv" enctype="multipart/form-data">
+            <label for="csv-file">CSV File</label>
+            <input type="file" id="csv-file" name="file" accept=".csv" required>
+            <small>CSV should contain columns: full_name, first_name, headline, company, location, profile_url</small>
+
+            <footer style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="secondary outline" onclick="closeModal('upload-csv-modal')">Cancel</button>
+                <button type="submit">Upload</button>
+            </footer>
+        </form>
+    </div>
+</div>
+
+<!-- Campaign Start Modal -->
+<div class="modal-overlay" id="campaign-modal">
+    <div class="modal-content">
+        <header>
+            <h3>Start Campaign</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('campaign-modal')" type="button">&times;</button>
+        </header>
+        <form method="post" action="/campaigns/create">
+            <input type="hidden" name="list_id" value="{{ list_info.id }}">
+
+            <label for="campaign-name">Campaign Name</label>
+            <input type="text" id="campaign-name" name="name" placeholder="e.g. Like — {{ list_info.name }}" required>
+
+            <label for="campaign-sender">Sender</label>
+            <select id="campaign-sender" name="sender_id" required>
+                <option value="">Select sender...</option>
+                {% for sender in senders|default([]) %}
+                <option value="{{ sender.id }}">{{ sender.name }}</option>
+                {% endfor %}
+            </select>
+
+            <fieldset>
+                <legend>Campaign Type</legend>
+                <label>
+                    <input type="radio" id="campaign-type-like" name="campaign_type" value="like" checked>
+                    Like
+                </label>
+                <label>
+                    <input type="radio" id="campaign-type-comment" name="campaign_type" value="comment">
+                    Comment
+                </label>
+            </fieldset>
+
+            <footer style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="secondary outline" onclick="closeModal('campaign-modal')">Cancel</button>
+                <button type="submit">Create Campaign</button>
+            </footer>
+        </form>
+    </div>
+</div>
+{% endblock %}

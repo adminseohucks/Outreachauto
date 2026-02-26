@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Settings — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<h2>Settings</h2>
+
+<!-- VPS Connection -->
+<article>
+    <hgroup>
+        <h3>VPS Connection</h3>
+        <p>Remote browser automation server status</p>
+    </hgroup>
+    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+        <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: {{ 'var(--lp-green)' if vps_status and vps_status.connected else 'var(--lp-red)' }};"></span>
+        <strong>{{ 'Connected' if vps_status and vps_status.connected else 'Disconnected' }}</strong>
+    </div>
+    {% if vps_status %}
+    <div style="font-size: 0.85rem; margin-bottom: 1rem;">
+        {% if vps_status.url %}
+        <p style="margin-bottom: 0.25rem;"><strong>URL:</strong> {{ vps_status.url }}</p>
+        {% endif %}
+        {% if vps_status.latency is defined and vps_status.latency is not none %}
+        <p style="margin-bottom: 0.25rem;"><strong>Latency:</strong> {{ vps_status.latency }}ms</p>
+        {% endif %}
+        {% if vps_status.model %}
+        <p style="margin-bottom: 0.25rem;"><strong>Model:</strong> {{ vps_status.model }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+    <form method="post" action="/settings/test-vps" style="margin: 0;">
+        <button type="submit" class="outline">Test Connection</button>
+    </form>
+</article>
+
+<!-- Settings Form -->
+<form method="post" action="/settings/save">
+
+    <!-- Work Hours -->
+    <article>
+        <hgroup>
+            <h3>Work Hours</h3>
+            <p>Configure when automation is allowed to run</p>
+        </hgroup>
+        <fieldset class="grid">
+            <label>
+                Start Hour (0-23)
+                <input type="number" name="work_hour_start" min="0" max="23" value="{{ settings.work_hour_start | default(9) }}">
+            </label>
+            <label>
+                End Hour (0-23)
+                <input type="number" name="work_hour_end" min="0" max="23" value="{{ settings.work_hour_end | default(17) }}">
+            </label>
+        </fieldset>
+        <fieldset>
+            <legend>Work Days</legend>
+            <div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+                {% set days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] %}
+                {% set day_labels = {'mon': 'Monday', 'tue': 'Tuesday', 'wed': 'Wednesday', 'thu': 'Thursday', 'fri': 'Friday', 'sat': 'Saturday', 'sun': 'Sunday'} %}
+                {% set work_days = settings.work_days | default(['mon', 'tue', 'wed', 'thu', 'fri']) %}
+                {% for day in days %}
+                <label>
+                    <input type="checkbox" name="work_days" value="{{ day }}" {% if day in work_days %}checked{% endif %}>
+                    {{ day_labels[day] }}
+                </label>
+                {% endfor %}
+            </div>
+        </fieldset>
+    </article>
+
+    <!-- Rate Limits -->
+    <article>
+        <hgroup>
+            <h3>Rate Limits</h3>
+            <p>Control daily and weekly action limits per sender</p>
+        </hgroup>
+
+        <h4>Like Limits</h4>
+        <fieldset class="grid">
+            <label>
+                Daily Like Limit
+                <input type="number" name="daily_like_limit" min="1" value="{{ settings.daily_like_limit | default(25) }}">
+            </label>
+            <label>
+                Weekly Like Limit
+                <input type="number" name="weekly_like_limit" min="1" value="{{ settings.weekly_like_limit | default(100) }}">
+            </label>
+        </fieldset>
+
+        <h4>Comment Limits</h4>
+        <fieldset class="grid">
+            <label>
+                Daily Comment Limit
+                <input type="number" name="daily_comment_limit" min="1" value="{{ settings.daily_comment_limit | default(15) }}">
+            </label>
+            <label>
+                Weekly Comment Limit
+                <input type="number" name="weekly_comment_limit" min="1" value="{{ settings.weekly_comment_limit | default(60) }}">
+            </label>
+        </fieldset>
+
+        <h4>Delay Ranges (seconds)</h4>
+        <fieldset class="grid">
+            <label>
+                Like Delay Min
+                <input type="number" name="like_delay_min" min="1" value="{{ settings.like_delay_min | default(30) }}">
+            </label>
+            <label>
+                Like Delay Max
+                <input type="number" name="like_delay_max" min="1" value="{{ settings.like_delay_max | default(90) }}">
+            </label>
+        </fieldset>
+        <fieldset class="grid">
+            <label>
+                Comment Delay Min
+                <input type="number" name="comment_delay_min" min="1" value="{{ settings.comment_delay_min | default(60) }}">
+            </label>
+            <label>
+                Comment Delay Max
+                <input type="number" name="comment_delay_max" min="1" value="{{ settings.comment_delay_max | default(180) }}">
+            </label>
+        </fieldset>
+    </article>
+
+    <button type="submit">Save Settings</button>
+</form>
+{% endblock %}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}LinkedPilot v2{% endblock %}</title>
+    <!-- Pico CSS - Lightweight, semantic CSS framework -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <!-- HTMX for dynamic updates -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+    <link rel="stylesheet" href="/static/css/custom.css">
+</head>
+<body>
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>LinkedPilot v2</strong></li>
+        </ul>
+        <ul>
+            <li><a href="/" {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a></li>
+            <li><a href="/leads" {% if active_page == 'leads' %}class="active"{% endif %}>Leads</a></li>
+            <li><a href="/lists" {% if active_page == 'lists' %}class="active"{% endif %}>Lists</a></li>
+            <li><a href="/campaigns" {% if active_page == 'campaigns' %}class="active"{% endif %}>Campaigns</a></li>
+            <li><a href="/comments" {% if active_page == 'comments' %}class="active"{% endif %}>Comments</a></li>
+            <li><a href="/senders" {% if active_page == 'senders' %}class="active"{% endif %}>Senders</a></li>
+            <li><a href="/logs" {% if active_page == 'logs' %}class="active"{% endif %}>Logs</a></li>
+            <li><a href="/settings" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Live activity ticker at bottom -->
+    <footer class="container-fluid" id="activity-ticker">
+        <div hx-ext="sse" sse-connect="/api/activity-stream" sse-swap="activity">
+            <small id="live-feed">Connecting to live feed...</small>
+        </div>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

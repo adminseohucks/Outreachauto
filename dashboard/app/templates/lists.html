@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Named Lists — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<section>
+    <hgroup>
+        <h2>Named Lists</h2>
+    </hgroup>
+
+    <div style="margin-bottom: 1.5rem;">
+        <button onclick="openModal('create-list-modal')">Create New List</button>
+    </div>
+
+    <!-- Lists table -->
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Source</th>
+                <th>Lead Count</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for lst in lists %}
+            <tr>
+                <td><strong>{{ lst.name }}</strong></td>
+                <td><span class="badge badge-{{ lst.source or 'pending' }}">{{ lst.source or 'manual' }}</span></td>
+                <td>{{ lst.lead_count or 0 }}</td>
+                <td>{{ lst.created_at[:10] if lst.created_at else '' }}</td>
+                <td>
+                    <div class="action-buttons">
+                        <a href="/lists/{{ lst.id }}" role="button" class="outline secondary">View</a>
+                        <form method="post" action="/lists/{{ lst.id }}" style="margin: 0;" onsubmit="return confirmDelete('Are you sure you want to delete the list &quot;{{ lst.name }}&quot;?');">
+                            <input type="hidden" name="_method" value="DELETE">
+                            <button type="submit" class="outline" style="color: var(--lp-red); border-color: var(--lp-red);"
+                                    hx-delete="/lists/{{ lst.id }}"
+                                    hx-confirm="Are you sure you want to delete the list '{{ lst.name }}'?"
+                                    hx-target="closest tr"
+                                    hx-swap="outerHTML">Delete</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" style="text-align: center;">No lists yet. Create one to get started.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<!-- Create List Modal -->
+<div class="modal-overlay" id="create-list-modal">
+    <div class="modal-content">
+        <header>
+            <h3>Create New List</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('create-list-modal')" type="button">&times;</button>
+        </header>
+        <form method="post" action="/lists/create">
+            <label for="list-name">List Name</label>
+            <input type="text" id="list-name" name="name" placeholder="e.g. Q1 Outreach — Bengaluru" required>
+
+            <label for="list-description">Description</label>
+            <textarea id="list-description" name="description" placeholder="Optional description..." rows="3"></textarea>
+
+            <footer style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="secondary outline" onclick="closeModal('create-list-modal')">Cancel</button>
+                <button type="submit">Create List</button>
+            </footer>
+        </form>
+    </div>
+</div>
+{% endblock %}

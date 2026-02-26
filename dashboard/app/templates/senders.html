@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Senders — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<hgroup>
+    <h2>Senders <small>({{ senders|length }})</small></h2>
+    <p>Manage LinkedIn sender accounts</p>
+</hgroup>
+
+<button onclick="document.getElementById('add-sender-modal').classList.add('active')">+ Add Sender</button>
+
+<!-- Sender cards -->
+{% if senders %}
+<div class="sender-grid" style="margin-top: 1rem;">
+    {% for s in senders %}
+    <article class="sender-card" id="sender-{{ s.id }}">
+        <div class="sender-name">{{ s.name }}</div>
+        <div class="sender-email">{{ s.linkedin_email or '' }}</div>
+        {% if s.profile_url %}
+        <div style="margin-top: 0.25rem;">
+            <a href="{{ s.profile_url }}" target="_blank" rel="noopener" style="font-size: 0.85rem;">LinkedIn Profile</a>
+        </div>
+        {% endif %}
+        <div style="margin-top: 0.4rem;">
+            <span class="badge badge-{{ s.status }}">{{ s.status }}</span>
+        </div>
+        <div class="sender-stats">
+            <span>Likes: {{ s.likes_today or 0 }}/{{ s.daily_like_limit or 0 }}</span>
+            <span>Comments: {{ s.comments_today or 0 }}/{{ s.daily_comment_limit or 0 }}</span>
+        </div>
+        <div style="margin-top: 0.4rem; font-size: 0.85rem;">
+            Active campaigns: {{ s.active_campaigns | default(0) }}
+        </div>
+        <div class="action-buttons" style="margin-top: 0.75rem;">
+            <button class="outline" onclick="openEditSenderModal({{ s.id }}, {{ s.name | tojson }}, {{ (s.linkedin_email or '') | tojson }}, {{ (s.profile_url or '') | tojson }}, {{ (s.browser_profile or '') | tojson }})">Edit</button>
+            {% if s.status == 'active' %}
+            <form method="post" action="/senders/{{ s.id }}/toggle">
+                <button type="submit" class="outline secondary">Pause</button>
+            </form>
+            {% elif s.status == 'paused' %}
+            <form method="post" action="/senders/{{ s.id }}/toggle">
+                <button type="submit" class="outline">Activate</button>
+            </form>
+            {% endif %}
+            {% if s.status != 'disabled' %}
+            <form method="post" action="/senders/{{ s.id }}/disable" onsubmit="return confirm('Disable this sender?')">
+                <button type="submit" class="outline" style="color: var(--lp-red); border-color: var(--lp-red);">Disable</button>
+            </form>
+            {% endif %}
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<article style="margin-top: 1rem;">
+    <p>No senders configured. Add one to get started.</p>
+</article>
+{% endif %}
+
+<!-- Add Sender Modal -->
+<div class="modal-overlay" id="add-sender-modal">
+    <div class="modal-content">
+        <hgroup>
+            <h3>Add Sender</h3>
+            <p>Configure a new LinkedIn sender account</p>
+        </hgroup>
+        <form method="post" action="/senders/add">
+            <label>
+                Name
+                <input type="text" name="name" placeholder="e.g. John Doe" required>
+            </label>
+            <label>
+                LinkedIn Email
+                <input type="email" name="linkedin_email" placeholder="john@example.com" required>
+            </label>
+            <label>
+                Profile URL
+                <input type="url" name="profile_url" placeholder="https://linkedin.com/in/johndoe">
+            </label>
+            <label>
+                Browser Profile Path
+                <input type="text" name="browser_profile" placeholder="data/browser_profiles/sender_{{ senders|length + 1 }}" value="data/browser_profiles/sender_{{ senders|length + 1 }}">
+            </label>
+            <fieldset class="grid">
+                <button type="submit">Add Sender</button>
+                <button type="button" class="secondary" onclick="document.getElementById('add-sender-modal').classList.remove('active')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Sender Modal -->
+<div class="modal-overlay" id="edit-sender-modal">
+    <div class="modal-content">
+        <hgroup>
+            <h3>Edit Sender</h3>
+            <p>Update sender account details</p>
+        </hgroup>
+        <form method="post" id="edit-sender-form" action="">
+            <label>
+                Name
+                <input type="text" name="name" id="edit-sender-name" required>
+            </label>
+            <label>
+                LinkedIn Email
+                <input type="email" name="linkedin_email" id="edit-sender-email" required>
+            </label>
+            <label>
+                Profile URL
+                <input type="url" name="profile_url" id="edit-sender-url">
+            </label>
+            <label>
+                Browser Profile Path
+                <input type="text" name="browser_profile" id="edit-sender-browser">
+            </label>
+            <fieldset class="grid">
+                <button type="submit">Save Changes</button>
+                <button type="button" class="secondary" onclick="document.getElementById('edit-sender-modal').classList.remove('active')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openEditSenderModal(senderId, name, email, profileUrl, browserProfile) {
+    document.getElementById('edit-sender-form').action = '/senders/' + senderId + '/edit';
+    document.getElementById('edit-sender-name').value = name;
+    document.getElementById('edit-sender-email').value = email;
+    document.getElementById('edit-sender-url').value = profileUrl;
+    document.getElementById('edit-sender-browser').value = browserProfile;
+    document.getElementById('edit-sender-modal').classList.add('active');
+}
+</script>
+{% endblock %}
