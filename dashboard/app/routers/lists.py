@@ -1,7 +1,9 @@
 """LinkedPilot v2 — Named lists router."""
 
+import json
+
 from fastapi import APIRouter, Request, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import TEMPLATES_DIR
@@ -85,8 +87,9 @@ async def upload_csv_to_list(
     request: Request,
     list_id: int,
     file: UploadFile = File(...),
+    column_mapping: str = Form(""),
 ):
-    """Upload a CSV file to add leads to a list."""
+    """Upload a CSV file to add leads to a list with optional column mapping."""
     db = await get_lp_db()
 
     # Verify list exists
@@ -94,10 +97,19 @@ async def upload_csv_to_list(
         "SELECT id FROM custom_lists WHERE id = ?", (list_id,)
     )
     if not await cursor.fetchone():
-        return RedirectResponse(url="/lists", status_code=303)
+        return JSONResponse({"success": False, "errors": ["List not found."]})
 
     content = await file.read()
-    result = await import_csv_to_list(content, list_id)
+
+    # Parse column mapping JSON from the header-matching modal
+    mapping = None
+    if column_mapping:
+        try:
+            mapping = json.loads(column_mapping)
+        except json.JSONDecodeError:
+            mapping = None
+
+    result = await import_csv_to_list(content, list_id, column_mapping=mapping)
 
     # Update lead count
     cursor = await db.execute(
@@ -112,7 +124,12 @@ async def upload_csv_to_list(
     )
     await db.commit()
 
-    return RedirectResponse(url=f"/lists/{list_id}", status_code=303)
+    return JSONResponse({
+        "success": True,
+        "imported": result["imported"],
+        "skipped": result["skipped"],
+        "errors": result["errors"],
+    })
 
 
 @router.delete("/lists/{list_id}")

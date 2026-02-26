@@ -56,19 +56,25 @@ async def export_leads_csv(leads: List[dict], filename: str) -> str:
     return file_path
 
 
-async def import_csv_to_list(file_content: bytes, list_id: int) -> dict:
+async def import_csv_to_list(
+    file_content: bytes,
+    list_id: int,
+    column_mapping: dict | None = None,
+) -> dict:
     """
     Parse CSV bytes and insert leads into custom_list_leads.
 
-    Required CSV column: profile_url
-    Optional columns: full_name, headline, company, location
+    When column_mapping is provided (from the header-matching modal), it is a
+    dict mapping CSV header names to DB field names, e.g.:
+        {"Person Linkedin Url": "profile_url", "Name": "full_name", ...}
+
+    When column_mapping is None, falls back to expecting exact DB column names.
+
+    Required: at least one CSV column must map to profile_url.
+    Optional DB fields: full_name, first_name, headline, company, location.
 
     Duplicates (same profile_url + list_id) are skipped.
     Source is set to 'csv_upload'.
-
-    Args:
-        file_content: Raw bytes of the uploaded CSV file.
-        list_id: ID of the custom list to insert leads into.
 
     Returns:
         {imported: int, skipped: int, errors: list[str]}
@@ -89,19 +95,44 @@ async def import_csv_to_list(file_content: bytes, list_id: int) -> dict:
 
     reader = csv.DictReader(io.StringIO(text))
 
-    if not reader.fieldnames or "profile_url" not in reader.fieldnames:
-        return {
-            "imported": 0,
-            "skipped": 0,
-            "errors": ["CSV must contain a 'profile_url' column."],
-        }
+    if not reader.fieldnames:
+        return {"imported": 0, "skipped": 0, "errors": ["CSV file is empty or has no headers."]}
+
+    # Build a reverse lookup: db_field -> csv_header
+    # If column_mapping provided: {"CSV Header": "db_field"} → invert to {"db_field": "CSV Header"}
+    if column_mapping:
+        reverse_map = {}  # db_field -> csv_header
+        for csv_col, db_field in column_mapping.items():
+            if db_field:  # skip empty (unmapped) columns
+                reverse_map[db_field] = csv_col
+
+        if "profile_url" not in reverse_map:
+            return {
+                "imported": 0,
+                "skipped": 0,
+                "errors": ["No column mapped to 'profile_url'. It is required."],
+            }
+    else:
+        # Fallback: expect exact column names in CSV
+        if "profile_url" not in reader.fieldnames:
+            return {
+                "imported": 0,
+                "skipped": 0,
+                "errors": ["CSV must contain a 'profile_url' column."],
+            }
+        reverse_map = {f: f for f in reader.fieldnames}
+
+    def _get(row: dict, db_field: str) -> str:
+        """Get a value from the CSV row using the column mapping."""
+        csv_col = reverse_map.get(db_field, "")
+        return (row.get(csv_col) or "").strip() if csv_col else ""
 
     now = datetime.utcnow().isoformat()
 
     for row_num, row in enumerate(reader, start=2):  # row 1 is header
-        profile_url = (row.get("profile_url") or "").strip()
+        profile_url = _get(row, "profile_url")
         if not profile_url:
-            errors.append(f"Row {row_num}: missing profile_url -- skipped.")
+            errors.append(f"Row {row_num}: missing profile_url — skipped.")
             skipped += 1
             continue
 
@@ -115,19 +146,28 @@ async def import_csv_to_list(file_content: bytes, list_id: int) -> dict:
             skipped += 1
             continue
 
-        full_name = (row.get("full_name") or "").strip()
-        headline = (row.get("headline") or "").strip()
-        company = (row.get("company") or "").strip()
-        location = (row.get("location") or "").strip()
+        full_name = _get(row, "full_name")
+        first_name = _get(row, "first_name")
+        headline = _get(row, "headline")
+        company = _get(row, "company")
+        location = _get(row, "location")
+
+        # If full_name is empty but first_name exists, use first_name as full_name
+        if not full_name and first_name:
+            full_name = first_name
+
+        # Fallback: if still no name, use "Unknown"
+        if not full_name:
+            full_name = "Unknown"
 
         try:
             await db.execute(
                 """
                 INSERT INTO custom_list_leads
-                    (list_id, profile_url, full_name, headline, company, location, source, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'csv_upload', ?)
+                    (list_id, profile_url, full_name, first_name, headline, company, location, source, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'csv_upload', ?)
                 """,
-                (list_id, profile_url, full_name, headline, company, location, now),
+                (list_id, profile_url, full_name, first_name, headline, company, location, now),
             )
             imported += 1
         except Exception as exc:

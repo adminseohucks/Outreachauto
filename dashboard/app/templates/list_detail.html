@@ -58,23 +58,52 @@
     </table>
 </section>
 
-<!-- CSV Upload Modal -->
+<!-- CSV Upload Modal — Two-step with header matching -->
 <div class="modal-overlay" id="upload-csv-modal">
-    <div class="modal-content">
+    <div class="modal-content" style="max-width: 620px;">
         <header>
-            <h3>Upload CSV</h3>
-            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('upload-csv-modal')" type="button">&times;</button>
+            <h3 id="csv-modal-title">Upload CSV</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="csvUploadReset()" type="button">&times;</button>
         </header>
-        <form method="post" action="/lists/{{ list_info.id }}/upload-csv" enctype="multipart/form-data">
-            <label for="csv-file">CSV File</label>
-            <input type="file" id="csv-file" name="file" accept=".csv" required>
-            <small>CSV should contain columns: full_name, first_name, headline, company, location, profile_url</small>
+
+        <!-- Step 1: File selection -->
+        <div id="csv-step-1">
+            <label for="csv-file">Select CSV File</label>
+            <input type="file" id="csv-file" accept=".csv" onchange="csvFileSelected(this)">
+            <small>Upload a CSV with your lead data. You will map columns in the next step.</small>
+        </div>
+
+        <!-- Step 2: Header matching -->
+        <div id="csv-step-2" style="display: none;">
+            <p style="margin-bottom: 0.5rem;"><strong id="csv-file-info"></strong></p>
+            <small style="display: block; margin-bottom: 1rem;">Match your CSV columns to the database fields. <span style="color: var(--lp-accent);">profile_url is required.</span></small>
+
+            <table class="data-table" style="font-size: 0.85rem;">
+                <thead>
+                    <tr>
+                        <th>Your CSV Column</th>
+                        <th>Map To Database Field</th>
+                    </tr>
+                </thead>
+                <tbody id="csv-mapping-body">
+                    <!-- Populated by JavaScript -->
+                </tbody>
+            </table>
+
+            <div id="csv-mapping-error" style="color: var(--lp-red, #e53e3e); font-size: 0.85rem; margin-top: 0.5rem; display: none;"></div>
 
             <footer style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
-                <button type="button" class="secondary outline" onclick="closeModal('upload-csv-modal')">Cancel</button>
-                <button type="submit">Upload</button>
+                <button type="button" class="secondary outline" onclick="csvUploadReset()">Cancel</button>
+                <button type="button" id="csv-upload-btn" onclick="csvSubmitMapped({{ list_info.id }})">
+                    Upload &amp; Import
+                </button>
             </footer>
-        </form>
+        </div>
+
+        <!-- Step 3: Progress / Result -->
+        <div id="csv-step-3" style="display: none; text-align: center; padding: 1rem 0;">
+            <p id="csv-progress-msg" aria-busy="true">Uploading and importing leads...</p>
+        </div>
     </div>
 </div>
 
