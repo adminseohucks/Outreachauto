@@ -6,7 +6,8 @@ are completely independent (cookies, local-storage, etc.).
 """
 
 import logging
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Optional
 
 from playwright.async_api import (
     async_playwright,
@@ -28,7 +29,7 @@ class BrowserManager:
     """Manages one persistent Chromium context per sender."""
 
     def __init__(self) -> None:
-        self._contexts: Dict[str, BrowserContext] = {}
+        self._contexts: dict[int, BrowserContext] = {}
         self._playwright: Optional[Playwright] = None
 
     # ------------------------------------------------------------------
@@ -42,23 +43,17 @@ class BrowserManager:
             logger.info("Playwright initialised")
 
     async def get_context(
-        self, sender_id: str, profile_dir: str
+        self, sender_id: int, profile_dir: str
     ) -> BrowserContext:
-        """Return (or create) a persistent browser context for *sender_id*.
-
-        Parameters
-        ----------
-        sender_id:
-            Unique identifier for the sender (e.g. ``"sender_1"``).
-        profile_dir:
-            Path to the Chrome user-data directory,
-            e.g. ``"data/browser_profiles/sender_1"``.
-        """
+        """Return (or create) a persistent browser context for *sender_id*."""
         if sender_id in self._contexts:
             return self._contexts[sender_id]
 
         if self._playwright is None:
             await self.initialize()
+
+        # Ensure the profile directory exists
+        Path(profile_dir).mkdir(parents=True, exist_ok=True)
 
         context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=profile_dir,
@@ -75,14 +70,8 @@ class BrowserManager:
         logger.info("Browser context created for sender %s", sender_id)
         return context
 
-    async def get_page(self, sender_id: str) -> Page:
-        """Return a usable page from the sender's context.
-
-        If the context already has open pages the first one is returned;
-        otherwise a new page is created.
-
-        Raises ``KeyError`` if no context exists for *sender_id*.
-        """
+    async def get_page(self, sender_id: int) -> Page:
+        """Return a usable page from the sender's context."""
         context = self._contexts.get(sender_id)
         if context is None:
             raise KeyError(
@@ -97,11 +86,64 @@ class BrowserManager:
         page = await context.new_page()
         return page
 
+    def is_open(self, sender_id: int) -> bool:
+        """Check if a browser context is open for this sender."""
+        return sender_id in self._contexts
+
+    async def open_for_login(self, sender_id: int, profile_dir: str) -> None:
+        """Open browser and navigate to LinkedIn login page.
+
+        The browser stays open for the user to manually log in.
+        """
+        context = await self.get_context(sender_id, profile_dir)
+        page = await self.get_page(sender_id)
+        try:
+            await page.goto("https://www.linkedin.com/login", timeout=30000)
+        except Exception:
+            # If login page fails, try the homepage
+            await page.goto("https://www.linkedin.com/", timeout=30000)
+        logger.info("Opened LinkedIn login for sender %s", sender_id)
+
+    async def check_login_status(self, sender_id: int) -> dict:
+        """Check if the sender is logged into LinkedIn.
+
+        Returns dict with 'logged_in' (bool) and 'name' (str if logged in).
+        """
+        if sender_id not in self._contexts:
+            return {"logged_in": False, "error": "Browser not open"}
+
+        try:
+            page = await self.get_page(sender_id)
+            current_url = page.url
+
+            # If we're on the feed or any non-login page, we're logged in
+            if "feed" in current_url or "mynetwork" in current_url or "messaging" in current_url:
+                # Try to get the user's name
+                try:
+                    name_el = await page.query_selector(".feed-identity-module__actor-meta a")
+                    name = await name_el.inner_text() if name_el else ""
+                except Exception:
+                    name = ""
+                return {"logged_in": True, "name": name}
+
+            # Navigate to feed to check
+            await page.goto("https://www.linkedin.com/feed/", timeout=15000)
+            await page.wait_for_timeout(2000)
+
+            final_url = page.url
+            if "login" in final_url or "checkpoint" in final_url:
+                return {"logged_in": False, "error": "Not logged in"}
+
+            return {"logged_in": True, "name": ""}
+
+        except Exception as e:
+            return {"logged_in": False, "error": str(e)}
+
     # ------------------------------------------------------------------
     # Teardown
     # ------------------------------------------------------------------
 
-    async def close_context(self, sender_id: str) -> None:
+    async def close_context(self, sender_id: int) -> None:
         """Close and remove the context for a single sender."""
         context = self._contexts.pop(sender_id, None)
         if context is not None:

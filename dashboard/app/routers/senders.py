@@ -1,11 +1,12 @@
 """LinkedPilot v2 — Sender management router."""
 
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import TEMPLATES_DIR
 from app.database import get_lp_db
+from app.automation.browser import browser_manager
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -19,6 +20,10 @@ async def senders_page(request: Request):
         "SELECT * FROM senders ORDER BY created_at DESC"
     )
     senders = [dict(row) for row in await cursor.fetchall()]
+
+    # Add browser status to each sender
+    for sender in senders:
+        sender["browser_open"] = browser_manager.is_open(sender["id"])
 
     return templates.TemplateResponse("senders.html", {
         "request": request,
@@ -126,4 +131,44 @@ async def disable_sender(request: Request, sender_id: int):
         (sender_id,),
     )
     await db.commit()
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+@router.post("/senders/{sender_id}/login")
+async def login_sender(request: Request, sender_id: int):
+    """Open a Chrome browser for this sender to manually log into LinkedIn.
+
+    The browser opens with the sender's dedicated profile directory.
+    The user logs in manually. Cookies are saved automatically.
+    """
+    db = await get_lp_db()
+    cursor = await db.execute(
+        "SELECT browser_profile FROM senders WHERE id = ?", (sender_id,)
+    )
+    sender = await cursor.fetchone()
+    if not sender:
+        return RedirectResponse(url="/senders", status_code=303)
+
+    profile_dir = sender["browser_profile"]
+    try:
+        await browser_manager.open_for_login(sender_id, profile_dir)
+    except Exception as e:
+        # Log the error but don't crash
+        import logging
+        logging.getLogger(__name__).error("Failed to open browser for sender %s: %s", sender_id, e)
+
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+@router.post("/senders/{sender_id}/check-login")
+async def check_login(request: Request, sender_id: int):
+    """Check if the sender is logged into LinkedIn. Returns JSON."""
+    result = await browser_manager.check_login_status(sender_id)
+    return JSONResponse(content=result)
+
+
+@router.post("/senders/{sender_id}/close-browser")
+async def close_browser(request: Request, sender_id: int):
+    """Close the browser for this sender."""
+    await browser_manager.close_context(sender_id)
     return RedirectResponse(url="/senders", status_code=303)

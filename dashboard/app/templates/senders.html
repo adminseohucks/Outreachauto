@@ -31,6 +31,27 @@
         <div style="margin-top: 0.4rem; font-size: 0.85rem;">
             Active campaigns: {{ s.active_campaigns | default(0) }}
         </div>
+        <!-- LinkedIn Login Controls -->
+        <div style="margin-top: 0.75rem; padding: 0.5rem; border: 1px dashed var(--pico-muted-border-color); border-radius: 6px;">
+            <small style="color: var(--lp-gray); display: block; margin-bottom: 0.4rem;">LinkedIn Session</small>
+            {% if s.browser_open %}
+            <span class="badge badge-active" style="margin-bottom: 0.4rem;">Browser Open</span>
+            <div class="action-buttons">
+                <form method="post" action="/senders/{{ s.id }}/check-login">
+                    <button type="button" class="outline" style="font-size: 0.75rem;" onclick="checkLogin({{ s.id }})">Verify Login</button>
+                </form>
+                <form method="post" action="/senders/{{ s.id }}/close-browser">
+                    <button type="submit" class="outline secondary" style="font-size: 0.75rem;">Close Browser</button>
+                </form>
+            </div>
+            {% else %}
+            <form method="post" action="/senders/{{ s.id }}/login">
+                <button type="submit" style="font-size: 0.8rem; padding: 0.4rem 0.8rem;">Login to LinkedIn</button>
+            </form>
+            {% endif %}
+            <div id="login-status-{{ s.id }}" style="font-size: 0.8rem; margin-top: 0.3rem;"></div>
+        </div>
+
         <div class="action-buttons" style="margin-top: 0.75rem;">
             <button class="outline" onclick="openEditSenderModal({{ s.id }}, {{ s.name | tojson }}, {{ (s.linkedin_email or '') | tojson }}, {{ (s.profile_url or '') | tojson }}, {{ (s.browser_profile or '') | tojson }})">Edit</button>
             {% if s.status == 'active' %}
@@ -131,6 +152,22 @@ function openEditSenderModal(senderId, name, email, profileUrl, browserProfile) 
     document.getElementById('edit-sender-url').value = profileUrl;
     document.getElementById('edit-sender-browser').value = browserProfile;
     document.getElementById('edit-sender-modal').classList.add('active');
+}
+
+async function checkLogin(senderId) {
+    const statusEl = document.getElementById('login-status-' + senderId);
+    statusEl.innerHTML = '<span style="color: var(--lp-orange);">Checking...</span>';
+    try {
+        const resp = await fetch('/senders/' + senderId + '/check-login', {method: 'POST'});
+        const data = await resp.json();
+        if (data.logged_in) {
+            statusEl.innerHTML = '<span class="badge badge-success">Logged in</span> ' + (data.name || '');
+        } else {
+            statusEl.innerHTML = '<span class="badge badge-failed">Not logged in</span> ' + (data.error || 'Please log in in the browser window');
+        }
+    } catch(e) {
+        statusEl.innerHTML = '<span class="badge badge-failed">Check failed</span>';
+    }
 }
 </script>
 {% endblock %}

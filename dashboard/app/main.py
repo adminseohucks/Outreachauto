@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from app.config import TEMPLATES_DIR, STATIC_DIR, EXPORTS_DIR
 from app.database import get_lp_db, close_databases
 from app.services.openoutreach_reader import ensure_mock_crm_db
+from app.automation.browser import browser_manager
 
 
 @asynccontextmanager
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI):
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     yield
     # Shutdown
+    await browser_manager.close_all()
     await close_databases()
 
 
