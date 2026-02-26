@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -31,12 +32,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="LinkedPilot v2", lifespan=lifespan)
 
+# CORS — allow Chrome extension to call /api/ext/* endpoints
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["chrome-extension://*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
 # Static files & templates
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # --- Import and register routers ---
-from app.routers import dashboard, leads, lists, campaigns, comments, settings_page, logs, senders, api
+from app.routers import dashboard, leads, lists, campaigns, comments, settings_page, logs, senders, api, ext_api
 
 app.include_router(dashboard.router)
 app.include_router(leads.router)
@@ -47,3 +56,4 @@ app.include_router(settings_page.router)
 app.include_router(logs.router)
 app.include_router(senders.router)
 app.include_router(api.router)
+app.include_router(ext_api.router)

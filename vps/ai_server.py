@@ -1,7 +1,8 @@
 """
 LinkedPilot v2 - VPS AI Comment Server
 FastAPI server with HMAC authentication that uses Ollama Phi-3
-to select the best LinkedIn comment for a given post.
+to select the best LinkedIn comment for a given post, and also
+generate original AI comments based on post context.
 """
 
 import hashlib
@@ -9,10 +10,12 @@ import hmac
 import os
 import random
 import time
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -34,9 +37,17 @@ SERVER_START_TIME: float = time.time()
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="LinkedPilot AI Comment Server",
-    version="2.0.0",
+    version="3.0.0",
     docs_url=None,
     redoc_url=None,
+)
+
+# CORS for Chrome extension requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["chrome-extension://*"],
+    allow_methods=["POST", "GET"],
+    allow_headers=["*"],
 )
 
 # ---------------------------------------------------------------------------
@@ -62,6 +73,20 @@ class SuggestCommentRequest(BaseModel):
 
 class SuggestCommentResponse(BaseModel):
     selected_index: int
+    comment_text: str
+    confidence: float
+
+
+class GenerateCommentRequest(BaseModel):
+    post_text: str = Field(..., max_length=5000)
+    post_author: str = Field(default="", max_length=200)
+    existing_comments: list[str] = Field(default_factory=list, max_length=10)
+    commenter_name: str = Field(default="", max_length=200)
+    tone: str = Field(default="professional", max_length=50)
+    language: str = Field(default="english", max_length=30)
+
+
+class GenerateCommentResponse(BaseModel):
     comment_text: str
     confidence: float
 
@@ -170,6 +195,49 @@ def _parse_ollama_index(response_text: str, num_comments: int) -> int | None:
     return None
 
 
+def _build_generate_prompt(
+    post_text: str,
+    post_author: str,
+    existing_comments: list[str],
+    commenter_name: str,
+    tone: str,
+    language: str,
+) -> str:
+    """Build a prompt for generating an original LinkedIn comment."""
+    existing_section = ""
+    if existing_comments:
+        numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(existing_comments))
+        existing_section = (
+            f"\nExisting comments on this post (for context — do NOT repeat these):\n{numbered}\n"
+        )
+
+    author_section = f" by {post_author}" if post_author else ""
+    name_section = f" Your name is {commenter_name}." if commenter_name else ""
+
+    lang_instruction = ""
+    if language.lower() != "english":
+        lang_instruction = f" Write the comment in {language}."
+
+    return (
+        f"You are a LinkedIn professional writing a comment on a post{author_section}.\n"
+        f"{name_section}\n"
+        f"Tone: {tone} — be genuine, specific to the post content, and add value.\n"
+        f"Rules:\n"
+        f"- Write ONLY the comment text, nothing else\n"
+        f"- Keep it 1-3 sentences, under 280 characters\n"
+        f"- Be specific to the post content, not generic\n"
+        f"- Sound natural and human, not like a bot\n"
+        f"- Add a unique perspective or ask a thoughtful question\n"
+        f"- Do NOT start with 'Great post' or 'Thanks for sharing'\n"
+        f"- Do NOT use hashtags or emojis\n"
+        f"- Do NOT repeat what existing comments already say\n"
+        f"{lang_instruction}\n"
+        f"{existing_section}\n"
+        f"Post:\n{post_text}\n\n"
+        f"Your comment:"
+    )
+
+
 async def _call_ollama(prompt: str) -> str | None:
     """Send a prompt to the local Ollama instance and return the response text."""
     payload = {
@@ -215,6 +283,46 @@ async def suggest_comment(req: SuggestCommentRequest):
         selected_index=zero_based,
         comment_text=req.comments[zero_based],
         confidence=confidence,
+    )
+
+
+@app.post("/api/generate-comment", response_model=GenerateCommentResponse)
+async def generate_comment(req: GenerateCommentRequest):
+    """Generate an original AI comment based on post content, tone, and existing comments."""
+    prompt = _build_generate_prompt(
+        post_text=req.post_text,
+        post_author=req.post_author,
+        existing_comments=req.existing_comments,
+        commenter_name=req.commenter_name,
+        tone=req.tone,
+        language=req.language,
+    )
+    ollama_response = await _call_ollama(prompt)
+
+    if ollama_response:
+        # Clean up: remove quotes, extra whitespace
+        comment = ollama_response.strip().strip('"').strip("'").strip()
+        # Remove any prefix like "Comment:" or "Here's my comment:"
+        for prefix in ["Comment:", "comment:", "Here's my comment:", "My comment:"]:
+            if comment.startswith(prefix):
+                comment = comment[len(prefix):].strip()
+        # Limit length to 280 chars (LinkedIn best practice)
+        if len(comment) > 280:
+            comment = comment[:277] + "..."
+        if comment:
+            return GenerateCommentResponse(comment_text=comment, confidence=0.9)
+
+    # Fallback: generate a simple generic comment
+    fallbacks = [
+        "Great insights! Thanks for sharing this.",
+        "Really valuable perspective. Appreciate you posting this!",
+        "This resonates so much. Well said!",
+        "Interesting take — thanks for putting this out there.",
+        "Couldn't agree more. Great post!",
+    ]
+    return GenerateCommentResponse(
+        comment_text=random.choice(fallbacks),
+        confidence=0.1,
     )
 
 
