@@ -80,6 +80,33 @@
             <div id="login-status-{{ s.id }}" style="font-size: 0.8rem; margin-top: 0.4rem;"></div>
         </div>
 
+        <!-- Extension Chrome Section -->
+        <div style="margin-top: 0.75rem; padding: 0.75rem; background: {% if s.extension_chrome_open %}#fef3c7{% else %}#f3f4f6{% endif %}; border-radius: 8px;">
+            {% if s.extension_chrome_open %}
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <span style="color: #22c55e; font-weight: bold;">&#9679;</span>
+                    <strong style="font-size: 0.9rem;">Extension Chrome is open</strong>
+                </div>
+                <p style="font-size: 0.8rem; margin-bottom: 0.5rem; color: #374151;">
+                    Install the commenting extension in this Chrome and log into LinkedIn. Use this Chrome for commenting.
+                </p>
+                <form method="post" action="/senders/{{ s.id }}/close-extension-chrome" style="margin:0;">
+                    <button type="submit" class="outline secondary" style="font-size: 0.75rem;">Close Extension Chrome</button>
+                </form>
+            {% else %}
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <span style="font-weight: bold; font-size: 0.9rem;">&#128295;</span>
+                    <strong style="font-size: 0.9rem;">Extension Chrome</strong>
+                </div>
+                <p style="font-size: 0.8rem; margin-bottom: 0.5rem; color: #374151;">
+                    Opens a separate Chrome (not automated) for the commenting extension. Your normal Chrome stays untouched.
+                </p>
+                <form method="post" action="/senders/{{ s.id }}/open-extension-chrome" style="margin:0;">
+                    <button type="submit" class="outline" style="font-size: 0.85rem; padding: 0.4rem 1rem;">Open Chrome for Extension</button>
+                </form>
+            {% endif %}
+        </div>
+
         <!-- Company Pages Section -->
         <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--pico-card-sectioning-background-color, #f8f9fa); border-radius: 8px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
@@ -168,13 +195,32 @@
     <div style="padding: 1rem; font-size: 0.9rem;">
         <ol>
             <li><strong>Add account</strong> -- Enter the name and LinkedIn email</li>
-            <li><strong>Click "Open Chrome & Login"</strong> -- A separate Chrome window opens</li>
+            <li><strong>Click "Open Chrome & Login"</strong> -- A separate Chrome window opens (for likes/connects automation)</li>
             <li><strong>Log into LinkedIn</strong> -- Enter your email + password in that Chrome window</li>
             <li><strong>Complete any verification</strong> -- 2FA, captcha, phone verification etc.</li>
             <li><strong>Click "Verify Login"</strong> back here -- Confirms the session is active</li>
             <li><strong>Done!</strong> -- Cookies are saved. You won't need to log in again unless LinkedIn forces it.</li>
         </ol>
         <p style="margin-top: 0.5rem;"><strong>Note:</strong> Your password is NEVER stored anywhere. Each account gets a completely isolated Chrome profile.</p>
+    </div>
+</details>
+
+<details style="margin-top: 1rem;">
+    <summary><strong>What is "Extension Chrome"?</strong></summary>
+    <div style="padding: 1rem; font-size: 0.9rem;">
+        <p>Each sender has <strong>two separate Chrome browsers</strong>:</p>
+        <ol>
+            <li><strong>Automation Chrome</strong> (Open Chrome & Login) -- Used by the system for likes and connect requests. This is a Playwright-controlled browser.</li>
+            <li><strong>Extension Chrome</strong> (Open Chrome for Extension) -- A normal Chrome with a separate profile for the commenting extension. No automation flags, no "controlled by software" banner.</li>
+        </ol>
+        <p><strong>First time setup for Extension Chrome:</strong></p>
+        <ol>
+            <li>Click "Open Chrome for Extension" -- a fresh Chrome opens</li>
+            <li>Install the commenting extension (load unpacked from extensions folder)</li>
+            <li>Log into LinkedIn with this sender's account</li>
+            <li>Done! Next time you open it, the extension and login will still be there.</li>
+        </ol>
+        <p><strong>Your normal Chrome stays completely untouched.</strong></p>
     </div>
 </details>
 

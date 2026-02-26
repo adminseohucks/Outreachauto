@@ -6,6 +6,10 @@ are completely independent (cookies, local-storage, etc.).
 """
 
 import logging
+import os
+import platform
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -196,5 +200,96 @@ class BrowserManager:
                 self._playwright = None
 
 
-# Module-level singleton
+def _find_chrome() -> Optional[str]:
+    """Find the Chrome executable on this system."""
+    if platform.system() == "Windows":
+        candidates = [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+    # Linux / fallback
+    return shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium")
+
+
+class ExtensionChromeManager:
+    """Launch regular Chrome (not Playwright) with separate profiles for the extension.
+
+    Each sender gets a profile at ``data/extension_profiles/sender_<id>``.
+    No automation flags — it's a normal Chrome window where the user can
+    install the commenting extension and log into LinkedIn.
+    """
+
+    def __init__(self) -> None:
+        # sender_id → subprocess.Popen
+        self._processes: dict[int, subprocess.Popen] = {}
+
+    @staticmethod
+    def profile_dir(sender_id: int) -> str:
+        """Return the extension-profile directory path for a sender."""
+        base = Path(__file__).resolve().parent.parent.parent / "data" / "extension_profiles"
+        return str(base / f"sender_{sender_id}")
+
+    def is_open(self, sender_id: int) -> bool:
+        proc = self._processes.get(sender_id)
+        if proc is None:
+            return False
+        # Check if process is still alive
+        if proc.poll() is not None:
+            self._processes.pop(sender_id, None)
+            return False
+        return True
+
+    def open(self, sender_id: int) -> bool:
+        """Open a regular Chrome window with a dedicated profile.
+
+        Returns True if launched successfully, False otherwise.
+        """
+        if self.is_open(sender_id):
+            return True  # already open
+
+        chrome = _find_chrome()
+        if chrome is None:
+            logger.error("Chrome executable not found on this system")
+            return False
+
+        profile = self.profile_dir(sender_id)
+        Path(profile).mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            chrome,
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "https://www.linkedin.com/login",
+        ]
+
+        try:
+            proc = subprocess.Popen(cmd)
+            self._processes[sender_id] = proc
+            logger.info(
+                "Extension Chrome opened for sender %s (pid %s, profile %s)",
+                sender_id, proc.pid, profile,
+            )
+            return True
+        except Exception as exc:
+            logger.error("Failed to launch Chrome for sender %s: %s", sender_id, exc)
+            return False
+
+    def close(self, sender_id: int) -> None:
+        proc = self._processes.pop(sender_id, None)
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            logger.info("Extension Chrome closed for sender %s", sender_id)
+
+    def close_all(self) -> None:
+        for sid in list(self._processes):
+            self.close(sid)
+
+
+# Module-level singletons
 browser_manager = BrowserManager()
+extension_chrome = ExtensionChromeManager()

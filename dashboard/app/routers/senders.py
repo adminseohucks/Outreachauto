@@ -6,7 +6,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import TEMPLATES_DIR
 from app.database import get_lp_db
-from app.automation.browser import browser_manager
+from app.automation.browser import browser_manager, extension_chrome
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -32,6 +32,7 @@ async def senders_page(request: Request):
 
     for sender in senders:
         sender["browser_open"] = browser_manager.is_open(sender["id"])
+        sender["extension_chrome_open"] = extension_chrome.is_open(sender["id"])
         sender["company_pages"] = pages_by_sender.get(sender["id"], [])
 
     return templates.TemplateResponse("senders.html", {
@@ -211,6 +212,33 @@ async def check_login(request: Request, sender_id: int):
 async def close_browser(request: Request, sender_id: int):
     """Close the browser for this sender."""
     await browser_manager.close_context(sender_id)
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+# -----------------------------------------------------------------------
+# Extension Chrome — separate Chrome for the commenting extension
+# -----------------------------------------------------------------------
+
+@router.post("/senders/{sender_id}/open-extension-chrome")
+async def open_extension_chrome(request: Request, sender_id: int):
+    """Open a regular Chrome with a dedicated profile for the extension.
+
+    This is a normal Chrome window (no automation flags) where the user
+    can install the commenting extension and log into LinkedIn.
+    """
+    ok = extension_chrome.open(sender_id)
+    if not ok:
+        import logging
+        logging.getLogger(__name__).error(
+            "Failed to open extension Chrome for sender %s", sender_id
+        )
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+@router.post("/senders/{sender_id}/close-extension-chrome")
+async def close_extension_chrome(request: Request, sender_id: int):
+    """Close the extension Chrome for this sender."""
+    extension_chrome.close(sender_id)
     return RedirectResponse(url="/senders", status_code=303)
 
 
