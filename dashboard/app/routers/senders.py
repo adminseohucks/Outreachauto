@@ -134,6 +134,31 @@ async def disable_sender(request: Request, sender_id: int):
     return RedirectResponse(url="/senders", status_code=303)
 
 
+@router.post("/senders/login-all")
+async def login_all_senders(request: Request):
+    """Open Chrome browsers for all active senders."""
+    db = await get_lp_db()
+    cursor = await db.execute(
+        "SELECT id, browser_profile FROM senders WHERE status IN ('active', 'paused') ORDER BY id"
+    )
+    senders = await cursor.fetchall()
+    for sender in senders:
+        sid = sender["id"]
+        if not browser_manager.is_open(sid):
+            try:
+                await browser_manager.open_for_login(sid, sender["browser_profile"])
+            except Exception:
+                pass
+    return RedirectResponse(url="/senders", status_code=303)
+
+
+@router.post("/senders/close-all")
+async def close_all_browsers(request: Request):
+    """Close all open sender browsers (keeps Playwright running)."""
+    await browser_manager.close_all_contexts()
+    return RedirectResponse(url="/senders", status_code=303)
+
+
 @router.post("/senders/{sender_id}/login")
 async def login_sender(request: Request, sender_id: int):
     """Open a Chrome browser for this sender to manually log into LinkedIn.

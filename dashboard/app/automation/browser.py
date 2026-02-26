@@ -157,10 +157,17 @@ class BrowserManager:
                     exc,
                 )
 
-    async def close_all(self) -> None:
-        """Close every open context and stop Playwright."""
+    async def close_all_contexts(self) -> None:
+        """Close every open context but keep Playwright running.
+
+        Use this for the UI 'Close All Browsers' button.
+        """
         for sender_id in list(self._contexts):
             await self.close_context(sender_id)
+
+    async def close_all(self) -> None:
+        """Close every open context and stop Playwright (app shutdown)."""
+        await self.close_all_contexts()
 
         if self._playwright is not None:
             try:
