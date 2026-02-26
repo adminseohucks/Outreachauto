@@ -21,8 +21,16 @@ logger = logging.getLogger(__name__)
 CHROME_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
+    "Chrome/145.0.0.0 Safari/537.36"
 )
+
+# JavaScript to remove automation fingerprints
+STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+window.chrome = { runtime: {} };
+"""
 
 
 class BrowserManager:
@@ -63,8 +71,17 @@ class BrowserManager:
             locale="en-US",
             timezone_id="Asia/Kolkata",
             user_agent=CHROME_USER_AGENT,
-            args=["--disable-blink-features=AutomationControlled"],
+            ignore_default_args=["--enable-automation"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ],
         )
+
+        # Inject stealth script on every new page to hide automation fingerprints
+        await context.add_init_script(STEALTH_JS)
 
         self._contexts[sender_id] = context
         logger.info("Browser context created for sender %s", sender_id)
