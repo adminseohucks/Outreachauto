@@ -77,10 +77,19 @@ async def dashboard_home(request: Request):
         row = await cursor.fetchone()
         sender_comments = row["total"] if row else 0
 
+        cursor = await db.execute(
+            "SELECT COALESCE(SUM(count), 0) AS total "
+            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'connect'",
+            (today, sender["id"]),
+        )
+        row = await cursor.fetchone()
+        sender_connects = row["total"] if row else 0
+
         sender_cards.append({
             **sender,
             "likes_today": sender_likes,
             "comments_today": sender_comments,
+            "connects_today": sender_connects,
         })
 
     return templates.TemplateResponse("dashboard.html", {

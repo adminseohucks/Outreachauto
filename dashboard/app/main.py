@@ -18,6 +18,11 @@ async def lifespan(app: FastAPI):
     await get_lp_db()
     await ensure_mock_crm_db()
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Resume any campaigns that were active before server restart
+    from app.services.scheduler import scheduler
+    await scheduler.resume_active_campaigns()
+
     yield
     # Shutdown
     await browser_manager.close_all()

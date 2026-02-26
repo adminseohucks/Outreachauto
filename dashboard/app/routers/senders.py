@@ -46,8 +46,10 @@ async def add_sender(
     profile_url: str = Form(""),
     daily_like_limit: int = Form(100),
     daily_comment_limit: int = Form(50),
+    daily_connect_limit: int = Form(25),
     weekly_like_limit: int = Form(300),
     weekly_comment_limit: int = Form(200),
+    weekly_connect_limit: int = Form(100),
 ):
     """Add a new sender (LinkedIn account)."""
     db = await get_lp_db()
@@ -55,14 +57,14 @@ async def add_sender(
         """
         INSERT INTO senders
             (name, linkedin_email, browser_profile, profile_url,
-             daily_like_limit, daily_comment_limit,
-             weekly_like_limit, weekly_comment_limit)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             daily_like_limit, daily_comment_limit, daily_connect_limit,
+             weekly_like_limit, weekly_comment_limit, weekly_connect_limit)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name, linkedin_email, browser_profile, profile_url,
-            daily_like_limit, daily_comment_limit,
-            weekly_like_limit, weekly_comment_limit,
+            daily_like_limit, daily_comment_limit, daily_connect_limit,
+            weekly_like_limit, weekly_comment_limit, weekly_connect_limit,
         ),
     )
     await db.commit()
@@ -79,8 +81,10 @@ async def edit_sender(
     profile_url: str = Form(""),
     daily_like_limit: int = Form(100),
     daily_comment_limit: int = Form(50),
+    daily_connect_limit: int = Form(25),
     weekly_like_limit: int = Form(300),
     weekly_comment_limit: int = Form(200),
+    weekly_connect_limit: int = Form(100),
 ):
     """Edit an existing sender's details."""
     db = await get_lp_db()
@@ -93,14 +97,16 @@ async def edit_sender(
             profile_url = ?,
             daily_like_limit = ?,
             daily_comment_limit = ?,
+            daily_connect_limit = ?,
             weekly_like_limit = ?,
-            weekly_comment_limit = ?
+            weekly_comment_limit = ?,
+            weekly_connect_limit = ?
         WHERE id = ?
         """,
         (
             name, linkedin_email, browser_profile, profile_url,
-            daily_like_limit, daily_comment_limit,
-            weekly_like_limit, weekly_comment_limit,
+            daily_like_limit, daily_comment_limit, daily_connect_limit,
+            weekly_like_limit, weekly_comment_limit, weekly_connect_limit,
             sender_id,
         ),
     )

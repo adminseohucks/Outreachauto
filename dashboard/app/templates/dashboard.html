@@ -44,8 +44,12 @@
                 <span class="badge badge-{{ sender.status }}">{{ sender.status }}</span>
             </div>
             <div class="sender-stats">
-                <span>Likes: {{ sender.likes_today|default(0) }} / {{ sender.daily_like_limit|default(0) }}</span>
-                <span>Comments: {{ sender.comments_today|default(0) }} / {{ sender.daily_comment_limit|default(0) }}</span>
+                {% set likes_left = (sender.daily_like_limit|default(100)) - (sender.likes_today|default(0)) %}
+                {% set comments_left = (sender.daily_comment_limit|default(50)) - (sender.comments_today|default(0)) %}
+                {% set connects_left = (sender.daily_connect_limit|default(25)) - (sender.connects_today|default(0)) %}
+                <span>Likes: {{ sender.likes_today|default(0) }} / {{ sender.daily_like_limit|default(100) }} <small style="color: var(--lp-gray);">({{ likes_left }} left)</small></span>
+                <span>Comments: {{ sender.comments_today|default(0) }} / {{ sender.daily_comment_limit|default(50) }} <small style="color: var(--lp-gray);">({{ comments_left }} left)</small></span>
+                <span>Connects: {{ sender.connects_today|default(0) }} / {{ sender.daily_connect_limit|default(25) }} <small style="color: var(--lp-gray);">({{ connects_left }} left)</small></span>
             </div>
             <div style="margin-top: 0.4rem; font-size: 0.85rem;">
                 Running campaigns: {{ sender.running_campaigns|default(0) }}

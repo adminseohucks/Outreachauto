@@ -201,6 +201,15 @@ async def api_sender_status(request: Request):
         row = await cursor.fetchone()
         comments_today = row["total"] if row else 0
 
+        # Today's connects for this sender
+        cursor = await db.execute(
+            "SELECT COALESCE(SUM(count), 0) AS total "
+            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'connect'",
+            (today, sender["id"]),
+        )
+        row = await cursor.fetchone()
+        connects_today = row["total"] if row else 0
+
         # Running campaigns for this sender
         cursor = await db.execute(
             "SELECT id, name, campaign_type, processed, total_leads "
@@ -215,8 +224,10 @@ async def api_sender_status(request: Request):
             "status": sender["status"],
             "likes_today": likes_today,
             "comments_today": comments_today,
+            "connects_today": connects_today,
             "daily_like_limit": sender["daily_like_limit"],
             "daily_comment_limit": sender["daily_comment_limit"],
+            "daily_connect_limit": sender.get("daily_connect_limit", 25),
             "running_campaigns": running_campaigns,
         })
 

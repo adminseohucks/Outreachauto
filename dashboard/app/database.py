@@ -21,8 +21,10 @@ CREATE TABLE IF NOT EXISTS senders (
     status          TEXT DEFAULT 'active' CHECK(status IN ('active','paused','disabled')),
     daily_like_limit    INTEGER DEFAULT 100,
     daily_comment_limit INTEGER DEFAULT 50,
+    daily_connect_limit INTEGER DEFAULT 25,
     weekly_like_limit   INTEGER DEFAULT 300,
     weekly_comment_limit INTEGER DEFAULT 200,
+    weekly_connect_limit INTEGER DEFAULT 100,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -94,7 +96,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     list_id         INTEGER NOT NULL REFERENCES custom_lists(id),
     sender_id       INTEGER REFERENCES senders(id),
     company_page_id INTEGER DEFAULT NULL REFERENCES company_pages(id),
-    campaign_type   TEXT NOT NULL CHECK(campaign_type IN ('like','comment')),
+    campaign_type   TEXT NOT NULL CHECK(campaign_type IN ('like','comment','connect')),
     status          TEXT DEFAULT 'draft' CHECK(status IN ('draft','active','paused','completed','cancelled')),
     total_leads     INTEGER DEFAULT 0,
     processed       INTEGER DEFAULT 0,
@@ -113,13 +115,23 @@ CREATE TABLE IF NOT EXISTS action_queue (
     lead_id         INTEGER NOT NULL REFERENCES custom_list_leads(id),
     sender_id       INTEGER REFERENCES senders(id),
     company_page_id INTEGER DEFAULT NULL REFERENCES company_pages(id),
-    action_type     TEXT NOT NULL CHECK(action_type IN ('like','comment')),
+    action_type     TEXT NOT NULL CHECK(action_type IN ('like','comment','connect')),
     status          TEXT DEFAULT 'pending' CHECK(status IN ('pending','scheduled','running','done','failed','skipped')),
     comment_text    TEXT DEFAULT NULL,
+    connect_note    TEXT DEFAULT NULL,
     scheduled_at    DATETIME,
     completed_at    DATETIME,
     error_message   TEXT DEFAULT NULL,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Connection notes (predefined templates with {first_name} placeholder)
+CREATE TABLE IF NOT EXISTS connection_notes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    text        TEXT NOT NULL,
+    is_active   INTEGER DEFAULT 1,
+    usage_count INTEGER DEFAULT 0,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Activity log
@@ -174,6 +186,55 @@ async def _safe_add_column(db: aiosqlite.Connection, table: str, column: str, de
         logger.debug("Column %s.%s may already exist: %s", table, column, exc)
 
 
+async def _recreate_table_with_new_check(
+    db: aiosqlite.Connection,
+    table: str,
+    column: str,
+    old_values: str,
+    new_values: str,
+) -> None:
+    """Recreate a table to update a CHECK constraint (SQLite limitation).
+
+    Only runs if the current CHECK constraint doesn't include the new values.
+    """
+    try:
+        # Check current table SQL to see if migration is needed
+        cursor = await db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return
+        create_sql = row[0] if isinstance(row, dict) else row[0]
+        # If the new values are already in the CHECK, skip
+        if new_values in create_sql:
+            return
+
+        logger.info("Migrating table %s: adding %s to CHECK(%s)", table, new_values, column)
+
+        # Get column info
+        cursor = await db.execute(f"PRAGMA table_info({table})")
+        cols = [(r[1], r[2], r[3], r[4]) for r in await cursor.fetchall()]
+        col_names = [c[0] for c in cols]
+        col_list = ", ".join(col_names)
+
+        # Build new CREATE TABLE with updated check
+        new_create = create_sql.replace(old_values, new_values)
+        tmp_table = f"_{table}_new"
+        new_create = new_create.replace(f"CREATE TABLE {table}", f"CREATE TABLE {tmp_table}", 1)
+        # Also handle quoted/IF NOT EXISTS variants
+        new_create = new_create.replace(f'CREATE TABLE IF NOT EXISTS {table}', f'CREATE TABLE {tmp_table}')
+
+        await db.execute(new_create)
+        await db.execute(f"INSERT INTO {tmp_table} ({col_list}) SELECT {col_list} FROM {table}")
+        await db.execute(f"DROP TABLE {table}")
+        await db.execute(f"ALTER TABLE {tmp_table} RENAME TO {table}")
+        logger.info("Table %s migrated successfully", table)
+    except Exception as exc:
+        logger.error("Migration of %s failed: %s", table, exc)
+
+
 async def _run_migrations(db: aiosqlite.Connection) -> None:
     """Run migrations for existing databases that need new columns/tables."""
     # company_page_id on campaigns table
@@ -182,6 +243,34 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     # company_page_id on action_queue table
     await _safe_add_column(db, "action_queue", "company_page_id",
                            "INTEGER DEFAULT NULL REFERENCES company_pages(id)")
+
+    # --- v2.1: Add 'connect' to campaign_type and action_type ---
+    await _recreate_table_with_new_check(
+        db, "campaigns", "campaign_type",
+        "('like','comment')", "('like','comment','connect')",
+    )
+    await _recreate_table_with_new_check(
+        db, "action_queue", "action_type",
+        "('like','comment')", "('like','comment','connect')",
+    )
+    # connect_note column on action_queue
+    await _safe_add_column(db, "action_queue", "connect_note", "TEXT DEFAULT NULL")
+
+    # --- v2.1: Add connect limit columns to senders ---
+    await _safe_add_column(db, "senders", "daily_connect_limit", "INTEGER DEFAULT 25")
+    await _safe_add_column(db, "senders", "weekly_connect_limit", "INTEGER DEFAULT 100")
+
+    # --- v2.1: connection_notes table (created via SCHEMA_SQL for fresh DBs) ---
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS connection_notes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            text        TEXT NOT NULL,
+            is_active   INTEGER DEFAULT 1,
+            usage_count INTEGER DEFAULT 0,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     await db.commit()
 
 

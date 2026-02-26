@@ -135,12 +135,14 @@ async def get_today_budget(sender_id: int, action_type: str) -> int:
     today_str = datetime.now(IST).date().isoformat()
 
     # We need the weekly limit -- derive from config
-    from app.config import WEEKLY_LIKE_LIMIT, WEEKLY_COMMENT_LIMIT
+    from app.config import WEEKLY_LIKE_LIMIT, WEEKLY_COMMENT_LIMIT, WEEKLY_CONNECT_LIMIT
 
     if action_type == "like":
         weekly_limit = WEEKLY_LIKE_LIMIT
     elif action_type == "comment":
         weekly_limit = WEEKLY_COMMENT_LIMIT
+    elif action_type == "connect":
+        weekly_limit = WEEKLY_CONNECT_LIMIT
     else:
         return 0
 

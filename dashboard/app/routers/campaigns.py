@@ -1,6 +1,8 @@
 """LinkedPilot v2 — Campaigns router."""
 
+import random
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -53,12 +55,19 @@ async def campaigns_page(request: Request):
     )
     company_pages = [dict(row) for row in await cursor.fetchall()]
 
+    # Get connection notes for connect campaign form
+    cursor = await db.execute(
+        "SELECT * FROM connection_notes ORDER BY id"
+    )
+    connection_notes = [dict(row) for row in await cursor.fetchall()]
+
     return templates.TemplateResponse("campaigns.html", {
         "request": request,
         "campaigns": campaigns,
         "lists": lists,
         "senders": senders,
         "company_pages": company_pages,
+        "connection_notes": connection_notes,
         "active_page": "campaigns",
     })
 
@@ -96,21 +105,37 @@ async def create_campaign(
     await db.commit()
     campaign_id = cursor.lastrowid
 
+    # For connect campaigns, fetch active connection notes
+    connection_notes = []
+    if campaign_type == "connect":
+        cursor = await db.execute(
+            "SELECT id, text FROM connection_notes WHERE is_active = 1"
+        )
+        connection_notes = [dict(r) for r in await cursor.fetchall()]
+
     # Pre-populate action queue from list leads
     cursor = await db.execute(
-        "SELECT id FROM custom_list_leads WHERE list_id = ?",
+        "SELECT id, first_name, full_name FROM custom_list_leads WHERE list_id = ?",
         (list_id,),
     )
     lead_rows = await cursor.fetchall()
     for lead_row in lead_rows:
         lead_id = lead_row["id"]
+        connect_note = None
+
+        # For connect campaigns, pick random note and personalize with name
+        if campaign_type == "connect" and connection_notes:
+            note_template = random.choice(connection_notes)
+            first_name = lead_row["first_name"] or lead_row["full_name"].split()[0]
+            connect_note = note_template["text"].replace("{first_name}", first_name)
+
         await db.execute(
             """
             INSERT INTO action_queue
-                (campaign_id, lead_id, sender_id, company_page_id, action_type, status)
-            VALUES (?, ?, ?, ?, ?, 'pending')
+                (campaign_id, lead_id, sender_id, company_page_id, action_type, connect_note, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
             """,
-            (campaign_id, lead_id, sender_id, page_id, campaign_type),
+            (campaign_id, lead_id, sender_id, page_id, campaign_type, connect_note),
         )
     await db.commit()
 
@@ -198,22 +223,69 @@ async def campaign_detail(request: Request, campaign_id: int):
         return RedirectResponse(url="/campaigns", status_code=303)
     campaign = dict(campaign)
 
-    # Action queue for this campaign
+    # Action queue — last 10 actions (most recent first)
     cursor = await db.execute(
         """
         SELECT aq.*, cll.full_name AS lead_name, cll.profile_url AS lead_url
         FROM action_queue aq
         LEFT JOIN custom_list_leads cll ON aq.lead_id = cll.id
         WHERE aq.campaign_id = ?
-        ORDER BY aq.id
+        ORDER BY aq.id DESC
+        LIMIT 10
         """,
         (campaign_id,),
     )
     actions = [dict(row) for row in await cursor.fetchall()]
 
+    # Status summary counts
+    cursor = await db.execute(
+        """
+        SELECT status, COUNT(*) as cnt
+        FROM action_queue WHERE campaign_id = ?
+        GROUP BY status
+        """,
+        (campaign_id,),
+    )
+    status_counts = {row["status"]: row["cnt"] for row in await cursor.fetchall()}
+
     return templates.TemplateResponse("campaign_detail.html", {
         "request": request,
         "campaign": campaign,
         "actions": actions,
+        "status_counts": status_counts,
         "active_page": "campaigns",
     })
+
+
+# -----------------------------------------------------------------------
+# Connection Notes management
+# -----------------------------------------------------------------------
+
+@router.post("/connection-notes/add")
+async def add_connection_note(request: Request, text: str = Form(...)):
+    """Add a new connection note template."""
+    db = await get_lp_db()
+    await db.execute("INSERT INTO connection_notes (text) VALUES (?)", (text,))
+    await db.commit()
+    return RedirectResponse(url="/campaigns", status_code=303)
+
+
+@router.post("/connection-notes/{note_id}/delete")
+async def delete_connection_note(request: Request, note_id: int):
+    """Delete a connection note."""
+    db = await get_lp_db()
+    await db.execute("DELETE FROM connection_notes WHERE id = ?", (note_id,))
+    await db.commit()
+    return RedirectResponse(url="/campaigns", status_code=303)
+
+
+@router.post("/connection-notes/{note_id}/toggle")
+async def toggle_connection_note(request: Request, note_id: int):
+    """Toggle a connection note active/inactive."""
+    db = await get_lp_db()
+    await db.execute(
+        "UPDATE connection_notes SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END WHERE id = ?",
+        (note_id,),
+    )
+    await db.commit()
+    return RedirectResponse(url="/campaigns", status_code=303)

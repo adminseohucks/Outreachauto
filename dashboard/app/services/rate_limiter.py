@@ -13,8 +13,10 @@ from app.database import get_lp_db
 from app.config import (
     DAILY_LIKE_LIMIT,
     DAILY_COMMENT_LIMIT,
+    DAILY_CONNECT_LIMIT,
     WEEKLY_LIKE_LIMIT,
     WEEKLY_COMMENT_LIMIT,
+    WEEKLY_CONNECT_LIMIT,
     WORK_HOUR_START,
     WORK_HOUR_END,
     RAMP_UP_WEEKS,
@@ -34,6 +36,8 @@ def _daily_limit_for(action_type: str) -> int:
         return DAILY_LIKE_LIMIT
     elif action_type == "comment":
         return DAILY_COMMENT_LIMIT
+    elif action_type == "connect":
+        return DAILY_CONNECT_LIMIT
     return 0
 
 
@@ -43,6 +47,8 @@ def _weekly_limit_for(action_type: str) -> int:
         return WEEKLY_LIKE_LIMIT
     elif action_type == "comment":
         return WEEKLY_COMMENT_LIMIT
+    elif action_type == "connect":
+        return WEEKLY_CONNECT_LIMIT
     return 0
 
 

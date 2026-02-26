@@ -16,6 +16,8 @@ from app.config import (
     LIKE_MAX_DELAY,
     COMMENT_MIN_DELAY,
     COMMENT_MAX_DELAY,
+    CONNECT_MIN_DELAY,
+    CONNECT_MAX_DELAY,
     CONTACT_COOLDOWN_DAYS,
 )
 from app.services.rate_limiter import (
@@ -35,45 +37,86 @@ def _delay_bounds(action_type: str) -> tuple[int, int]:
     """Return (min_delay, max_delay) in seconds for the given action type."""
     if action_type == "comment":
         return COMMENT_MIN_DELAY, COMMENT_MAX_DELAY
+    elif action_type == "connect":
+        return CONNECT_MIN_DELAY, CONNECT_MAX_DELAY
     return LIKE_MIN_DELAY, LIKE_MAX_DELAY
 
 
 # ---------------------------------------------------------------------------
-# Placeholder action executor
+# Action executor — calls real browser automation
 # ---------------------------------------------------------------------------
 
 async def _execute_action(action: dict) -> bool:
+    """Execute a single like, comment, or connect action via Playwright.
+
+    Uses the browser_manager to get the sender's browser page, then
+    delegates to the appropriate automation module.
+
+    Returns True on success, False on failure.
     """
-    Placeholder: execute a single like or comment action.
+    from app.automation.browser import browser_manager
 
-    In production this will call the browser-automation engine. For now it
-    simulates success after a short delay.
-
-    The action dict may contain:
-        - action_type: 'like' or 'comment'
-        - sender_id: which sender's browser to use
-        - profile_url: target LinkedIn profile
-        - company_page_name: if set, switch identity to this company page
-        - comment_text: text to post (for comment actions)
-
-    Args:
-        action: Row dict from action_queue (joined with company_pages).
-
-    Returns:
-        True on success, False on failure.
-    """
+    action_type = action.get("action_type", "like")
+    sender_id = action.get("sender_id")
+    profile_url = action.get("profile_url", "")
     company_page = action.get("company_page_name")
+
     logger.info(
         "Executing %s action (id=%s) on %s for sender %s%s",
-        action.get("action_type"),
+        action_type,
         action.get("id"),
-        action.get("profile_url"),
-        action.get("sender_id"),
+        profile_url,
+        sender_id,
         f" as page '{company_page}'" if company_page else "",
     )
-    # Simulate work
-    await asyncio.sleep(random.uniform(2, 5))
-    return True
+
+    if not profile_url:
+        logger.error("No profile_url for action %s", action.get("id"))
+        return False
+
+    # Get the sender's browser page
+    if not browser_manager.is_open(sender_id):
+        # Need to get sender's browser_profile to open context
+        db = await get_lp_db()
+        cursor = await db.execute(
+            "SELECT browser_profile FROM senders WHERE id = ?", (sender_id,)
+        )
+        sender_row = await cursor.fetchone()
+        if not sender_row:
+            logger.error("Sender %s not found in DB", sender_id)
+            return False
+        await browser_manager.get_context(sender_id, sender_row["browser_profile"])
+
+    try:
+        page = await browser_manager.get_page(sender_id)
+    except Exception as exc:
+        logger.error("Could not get browser page for sender %s: %s", sender_id, exc)
+        return False
+
+    # Dispatch to the correct automation module
+    if action_type == "like":
+        from app.automation.linkedin_like import like_latest_post
+        result = await like_latest_post(page, profile_url, company_page)
+        return result.get("success", False)
+
+    elif action_type == "comment":
+        from app.automation.linkedin_comment import comment_on_latest_post
+        comment_text = action.get("comment_text", "")
+        if not comment_text:
+            logger.error("No comment_text for comment action %s", action.get("id"))
+            return False
+        result = await comment_on_latest_post(page, profile_url, comment_text, company_page)
+        return result.get("success", False)
+
+    elif action_type == "connect":
+        from app.automation.linkedin_connect import send_connection_request
+        connect_note = action.get("connect_note")
+        result = await send_connection_request(page, profile_url, connect_note)
+        return result.get("success", False)
+
+    else:
+        logger.error("Unknown action_type: %s", action_type)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +188,22 @@ class CampaignScheduler:
             (campaign_id,),
         )
         await db.commit()
+
+    async def resume_active_campaigns(self) -> None:
+        """Resume any campaigns that are marked 'active' in the DB.
+
+        Called at startup to recover campaigns that were running when
+        the server was restarted.
+        """
+        db = await get_lp_db()
+        cursor = await db.execute(
+            "SELECT id FROM campaigns WHERE status = 'active'"
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            campaign_id = row["id"] if isinstance(row, dict) else row[0]
+            logger.info("Resuming active campaign %s from DB", campaign_id)
+            await self.start_campaign(campaign_id)
 
     async def get_running_campaigns(self) -> list[int]:
         """Return a list of campaign IDs that are currently running."""

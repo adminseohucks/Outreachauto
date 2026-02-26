@@ -46,6 +46,7 @@
         <div class="sender-stats" style="margin-top: 0.5rem;">
             <span>Likes: {{ s.likes_today or 0 }}/{{ s.daily_like_limit or 100 }}</span>
             <span>Comments: {{ s.comments_today or 0 }}/{{ s.daily_comment_limit or 50 }}</span>
+            <span>Connects: {{ s.connects_today or 0 }}/{{ s.daily_connect_limit or 25 }}</span>
         </div>
 
         <!-- LinkedIn Login Section -->
@@ -242,6 +243,16 @@
             </div>
             <div class="grid">
                 <label>
+                    Daily Connects
+                    <input type="number" name="daily_connect_limit" id="edit-dcn" value="25" min="0" max="100">
+                </label>
+                <label>
+                    Weekly Connects
+                    <input type="number" name="weekly_connect_limit" id="edit-wcn" value="100" min="0" max="500">
+                </label>
+            </div>
+            <div class="grid">
+                <label>
                     Weekly Likes
                     <input type="number" name="weekly_like_limit" id="edit-wl" value="300" min="0" max="2000">
                 </label>
@@ -269,6 +280,8 @@ function openEditModal(senderId, sender) {
     document.getElementById('edit-browser').value = sender.browser_profile || '';
     document.getElementById('edit-dl').value = sender.daily_like_limit || 100;
     document.getElementById('edit-dc').value = sender.daily_comment_limit || 50;
+    document.getElementById('edit-dcn').value = sender.daily_connect_limit || 25;
+    document.getElementById('edit-wcn').value = sender.weekly_connect_limit || 100;
     document.getElementById('edit-wl').value = sender.weekly_like_limit || 300;
     document.getElementById('edit-wc').value = sender.weekly_comment_limit || 200;
     openModal('edit-sender-modal');

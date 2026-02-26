@@ -21,6 +21,7 @@
                 <select name="campaign_type" required>
                     <option value="like">Like</option>
                     <option value="comment">Comment</option>
+                    <option value="connect">Connection Request</option>
                 </select>
             </label>
         </fieldset>
@@ -50,7 +51,7 @@
                 <select name="company_page_id" id="campaign-act-as">
                     <option value="0">Personal Profile (default)</option>
                     {% for pg in company_pages|default([]) %}
-                    <option value="{{ pg.id }}" data-sender-id="{{ pg.sender_id }}">{{ pg.sender_name }} → {{ pg.page_name }}</option>
+                    <option value="{{ pg.id }}" data-sender-id="{{ pg.sender_id }}">{{ pg.sender_name }} &rarr; {{ pg.page_name }}</option>
                     {% endfor %}
                 </select>
             </label>
@@ -60,8 +61,62 @@
     </form>
 </details>
 
+<!-- Connection Notes for Connect Campaigns -->
+<details style="margin-top: 1rem;">
+    <summary role="button" class="outline">Connection Notes (for Connect campaigns)</summary>
+    <p><small>Add up to 5 note templates. Use <code>{first_name}</code> to personalize with lead's name. A random note is picked for each connection request.</small></p>
+
+    {% if connection_notes|default([]) %}
+    <figure>
+        <table class="data-table" role="grid">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Note Template</th>
+                    <th>Status</th>
+                    <th>Used</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for note in connection_notes %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><small>{{ note.text }}</small></td>
+                    <td><span class="badge badge-{{ 'active' if note.is_active else 'paused' }}">{{ 'active' if note.is_active else 'inactive' }}</span></td>
+                    <td>{{ note.usage_count }}</td>
+                    <td>
+                        <div class="action-buttons">
+                            <form method="post" action="/connection-notes/{{ note.id }}/toggle" style="display:inline;">
+                                <button type="submit" class="outline" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">{{ 'Disable' if note.is_active else 'Enable' }}</button>
+                            </form>
+                            <form method="post" action="/connection-notes/{{ note.id }}/delete" onsubmit="return confirm('Delete this note?')" style="display:inline;">
+                                <button type="submit" class="outline secondary" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </figure>
+    {% else %}
+    <p><small>No connection notes yet. Add some below — they'll be used when sending connection requests.</small></p>
+    {% endif %}
+
+    <form method="post" action="/connection-notes/add">
+        <fieldset class="grid">
+            <label>
+                New Note
+                <input type="text" name="text" placeholder="Hi {first_name}, I'd love to connect! I found your profile interesting." required>
+            </label>
+            <button type="submit" style="margin-top: auto;">Add Note</button>
+        </fieldset>
+    </form>
+</details>
+
 {% if campaigns %}
-<figure>
+<figure style="margin-top: 1.5rem;">
     <table class="data-table" role="grid">
         <thead>
             <tr>
@@ -82,7 +137,7 @@
             {% for c in campaigns %}
             <tr>
                 <td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td>
-                <td><span class="badge badge-{{ 'blue' if c.campaign_type == 'like' else 'orange' }}">{{ c.campaign_type }}</span></td>
+                <td><span class="badge badge-{{ 'blue' if c.campaign_type == 'like' else 'green' if c.campaign_type == 'connect' else 'orange' }}">{{ c.campaign_type }}</span></td>
                 <td>{{ c.list_name or '—' }}</td>
                 <td>{{ c.sender_name or '—' }}{% if c.company_page_name %}<br><small style="color: var(--lp-accent);">as {{ c.company_page_name }}</small>{% endif %}</td>
                 <td><span class="badge badge-{{ c.status }}">{{ c.status }}</span></td>

@@ -31,6 +31,20 @@
     </div>
 </div>
 
+<!-- Queue status summary -->
+{% if status_counts %}
+<div style="margin-bottom: 1rem;">
+    <small>
+        Queue:
+        <span class="badge badge-pending">{{ status_counts.get('pending', 0) }} pending</span>
+        <span class="badge badge-running">{{ status_counts.get('running', 0) }} running</span>
+        <span class="badge badge-done">{{ status_counts.get('done', 0) }} done</span>
+        <span class="badge badge-failed">{{ status_counts.get('failed', 0) }} failed</span>
+        <span class="badge badge-skipped">{{ status_counts.get('skipped', 0) }} skipped</span>
+    </small>
+</div>
+{% endif %}
+
 <!-- Progress bar -->
 {% set pct = ((campaign.processed / campaign.total_leads * 100) | round(0) | int) if campaign.total_leads > 0 else 0 %}
 <div class="progress-bar" style="height: 12px; margin-bottom: 1rem;">
@@ -59,8 +73,8 @@
     <a href="/campaigns" role="button" class="outline secondary">Back to Campaigns</a>
 </div>
 
-<!-- Action queue table -->
-<h3>Action Queue</h3>
+<!-- Action queue table — last 10 -->
+<h3>Recent Actions <small style="color: var(--lp-gray);">(last 10)</small></h3>
 {% if actions %}
 <figure>
     <table class="data-table" role="grid">
@@ -68,10 +82,9 @@
             <tr>
                 <th>Lead Name</th>
                 <th>Profile URL</th>
-                <th>Action Type</th>
+                <th>Action</th>
                 <th>Status</th>
-                <th>Comment Text</th>
-                <th>Scheduled At</th>
+                <th>Note / Comment</th>
                 <th>Completed At</th>
                 <th>Error</th>
             </tr>
@@ -87,10 +100,9 @@
                     —
                     {% endif %}
                 </td>
-                <td><span class="badge badge-{{ 'blue' if a.action_type == 'like' else 'orange' }}">{{ a.action_type }}</span></td>
+                <td><span class="badge badge-{{ 'blue' if a.action_type == 'like' else 'green' if a.action_type == 'connect' else 'orange' }}">{{ a.action_type }}</span></td>
                 <td><span class="badge badge-{{ a.status }}">{{ a.status }}</span></td>
-                <td><small>{{ a.comment_text or '—' }}</small></td>
-                <td><small>{{ a.scheduled_at or '—' }}</small></td>
+                <td><small>{{ a.connect_note or a.comment_text or '—' }}</small></td>
                 <td><small>{{ a.completed_at or '—' }}</small></td>
                 <td><small>{{ a.error_message or '—' }}</small></td>
             </tr>
