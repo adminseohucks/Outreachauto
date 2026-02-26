@@ -31,26 +31,23 @@ async def ext_campaigns(request: Request):
                c.sender_id, c.company_page_id,
                cl.name AS list_name,
                s.name AS sender_name,
-               cp.page_name AS company_page_name
+               cp.page_name AS company_page_name,
+               COALESCE(pq.cnt, 0) AS pending_count
         FROM campaigns c
         LEFT JOIN custom_lists cl ON c.list_id = cl.id
         LEFT JOIN senders s ON c.sender_id = s.id
         LEFT JOIN company_pages cp ON c.company_page_id = cp.id
+        LEFT JOIN (
+            SELECT campaign_id, COUNT(*) AS cnt
+            FROM action_queue WHERE status = 'pending'
+            GROUP BY campaign_id
+        ) pq ON pq.campaign_id = c.id
         WHERE c.status IN ('active', 'draft')
         AND c.campaign_type = 'comment'
         ORDER BY c.created_at DESC
         """
     )
     campaigns = [dict(row) for row in await cursor.fetchall()]
-
-    # Add pending count for each campaign
-    for campaign in campaigns:
-        cursor = await db.execute(
-            "SELECT COUNT(*) AS cnt FROM action_queue WHERE campaign_id = ? AND status = 'pending'",
-            (campaign["id"],),
-        )
-        row = await cursor.fetchone()
-        campaign["pending_count"] = row["cnt"] if row else 0
 
     return JSONResponse({"campaigns": campaigns})
 

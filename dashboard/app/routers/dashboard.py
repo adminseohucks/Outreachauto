@@ -58,38 +58,27 @@ async def dashboard_home(request: Request):
     )
     activities = [dict(row) for row in await cursor.fetchall()]
 
-    # --- Per-sender today stats ---
+    # --- Per-sender today stats (single query for all senders) ---
+    cursor = await db.execute(
+        "SELECT sender_id, action_type, COALESCE(SUM(count), 0) AS total "
+        "FROM daily_counters WHERE date = ? GROUP BY sender_id, action_type",
+        (today,),
+    )
+    sender_stats = {}
+    for row in await cursor.fetchall():
+        sid = row["sender_id"]
+        if sid not in sender_stats:
+            sender_stats[sid] = {"like": 0, "comment": 0, "connect": 0}
+        sender_stats[sid][row["action_type"]] = row["total"]
+
     sender_cards = []
     for sender in senders:
-        cursor = await db.execute(
-            "SELECT COALESCE(SUM(count), 0) AS total "
-            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'like'",
-            (today, sender["id"]),
-        )
-        row = await cursor.fetchone()
-        sender_likes = row["total"] if row else 0
-
-        cursor = await db.execute(
-            "SELECT COALESCE(SUM(count), 0) AS total "
-            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'comment'",
-            (today, sender["id"]),
-        )
-        row = await cursor.fetchone()
-        sender_comments = row["total"] if row else 0
-
-        cursor = await db.execute(
-            "SELECT COALESCE(SUM(count), 0) AS total "
-            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'connect'",
-            (today, sender["id"]),
-        )
-        row = await cursor.fetchone()
-        sender_connects = row["total"] if row else 0
-
+        stats = sender_stats.get(sender["id"], {})
         sender_cards.append({
             **sender,
-            "likes_today": sender_likes,
-            "comments_today": sender_comments,
-            "connects_today": sender_connects,
+            "likes_today": stats.get("like", 0),
+            "comments_today": stats.get("comment", 0),
+            "connects_today": stats.get("connect", 0),
         })
 
     return templates.TemplateResponse("dashboard.html", {

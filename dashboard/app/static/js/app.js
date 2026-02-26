@@ -51,7 +51,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const stats = await resp.json();
                 updateStats(stats);
             } catch(e) {}
-        }, 5000);
+        }, 15000);
     }
 });
 

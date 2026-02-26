@@ -21,14 +21,18 @@ async def senders_page(request: Request):
     )
     senders = [dict(row) for row in await cursor.fetchall()]
 
-    # Add browser status and company pages to each sender
+    # Fetch all company pages in one query, then group by sender
+    cursor = await db.execute(
+        "SELECT * FROM company_pages ORDER BY page_name"
+    )
+    all_pages = [dict(row) for row in await cursor.fetchall()]
+    pages_by_sender = {}
+    for page in all_pages:
+        pages_by_sender.setdefault(page["sender_id"], []).append(page)
+
     for sender in senders:
         sender["browser_open"] = browser_manager.is_open(sender["id"])
-        cursor = await db.execute(
-            "SELECT * FROM company_pages WHERE sender_id = ? ORDER BY page_name",
-            (sender["id"],),
-        )
-        sender["company_pages"] = [dict(row) for row in await cursor.fetchall()]
+        sender["company_pages"] = pages_by_sender.get(sender["id"], [])
 
     return templates.TemplateResponse("senders.html", {
         "request": request,

@@ -171,6 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_aq_status ON action_queue(status);
 CREATE INDEX IF NOT EXISTS idx_aq_sender ON action_queue(sender_id, status);
 CREATE INDEX IF NOT EXISTS idx_al_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_dc_date ON daily_counters(date, sender_id);
+CREATE INDEX IF NOT EXISTS idx_aq_campaign ON action_queue(campaign_id, status);
 """
 
 

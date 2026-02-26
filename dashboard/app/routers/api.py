@@ -69,9 +69,9 @@ async def activity_stream_sse(request: Request, last_id: int = 0):
                     "data": json.dumps(event),
                 }
 
-        # --- Phase 2: Live polling every 2 seconds ---
+        # --- Phase 2: Live polling every 5 seconds ---
         while True:
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
 
             # Check if client disconnected
             if await request.is_disconnected():
@@ -181,54 +181,44 @@ async def api_sender_status(request: Request):
     cursor = await db.execute("SELECT * FROM senders ORDER BY name")
     senders = [dict(row) for row in await cursor.fetchall()]
 
+    # Batch: all sender stats for today in one query
+    cursor = await db.execute(
+        "SELECT sender_id, action_type, COALESCE(SUM(count), 0) AS total "
+        "FROM daily_counters WHERE date = ? GROUP BY sender_id, action_type",
+        (today,),
+    )
+    sender_stats = {}
+    for row in await cursor.fetchall():
+        sid = row["sender_id"]
+        if sid not in sender_stats:
+            sender_stats[sid] = {"like": 0, "comment": 0, "connect": 0}
+        sender_stats[sid][row["action_type"]] = row["total"]
+
+    # Batch: all active campaigns grouped by sender
+    cursor = await db.execute(
+        "SELECT id, name, campaign_type, processed, total_leads, sender_id "
+        "FROM campaigns WHERE status = 'active'"
+    )
+    campaigns_by_sender = {}
+    for row in await cursor.fetchall():
+        r = dict(row)
+        sid = r.pop("sender_id")
+        campaigns_by_sender.setdefault(sid, []).append(r)
+
     result = []
     for sender in senders:
-        # Today's likes for this sender
-        cursor = await db.execute(
-            "SELECT COALESCE(SUM(count), 0) AS total "
-            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'like'",
-            (today, sender["id"]),
-        )
-        row = await cursor.fetchone()
-        likes_today = row["total"] if row else 0
-
-        # Today's comments for this sender
-        cursor = await db.execute(
-            "SELECT COALESCE(SUM(count), 0) AS total "
-            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'comment'",
-            (today, sender["id"]),
-        )
-        row = await cursor.fetchone()
-        comments_today = row["total"] if row else 0
-
-        # Today's connects for this sender
-        cursor = await db.execute(
-            "SELECT COALESCE(SUM(count), 0) AS total "
-            "FROM daily_counters WHERE date = ? AND sender_id = ? AND action_type = 'connect'",
-            (today, sender["id"]),
-        )
-        row = await cursor.fetchone()
-        connects_today = row["total"] if row else 0
-
-        # Running campaigns for this sender
-        cursor = await db.execute(
-            "SELECT id, name, campaign_type, processed, total_leads "
-            "FROM campaigns WHERE sender_id = ? AND status = 'active'",
-            (sender["id"],),
-        )
-        running_campaigns = [dict(r) for r in await cursor.fetchall()]
-
+        stats = sender_stats.get(sender["id"], {})
         result.append({
             "id": sender["id"],
             "name": sender["name"],
             "status": sender["status"],
-            "likes_today": likes_today,
-            "comments_today": comments_today,
-            "connects_today": connects_today,
+            "likes_today": stats.get("like", 0),
+            "comments_today": stats.get("comment", 0),
+            "connects_today": stats.get("connect", 0),
             "daily_like_limit": sender["daily_like_limit"],
             "daily_comment_limit": sender["daily_comment_limit"],
             "daily_connect_limit": sender.get("daily_connect_limit", 25),
-            "running_campaigns": running_campaigns,
+            "running_campaigns": campaigns_by_sender.get(sender["id"], []),
         })
 
     return JSONResponse({"senders": result})
