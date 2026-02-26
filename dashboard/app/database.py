@@ -172,6 +172,12 @@ CREATE INDEX IF NOT EXISTS idx_aq_sender ON action_queue(sender_id, status);
 CREATE INDEX IF NOT EXISTS idx_al_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_dc_date ON daily_counters(date, sender_id);
 CREATE INDEX IF NOT EXISTS idx_aq_campaign ON action_queue(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_campaigns_sender ON campaigns(sender_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_list ON campaigns(list_id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+CREATE INDEX IF NOT EXISTS idx_cll_list ON custom_list_leads(list_id);
+CREATE INDEX IF NOT EXISTS idx_cp_sender ON company_pages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_al_id ON activity_log(id);
 """
 
 
@@ -283,6 +289,9 @@ async def get_lp_db() -> aiosqlite.Connection:
         _lp_db = await aiosqlite.connect(LINKEDPILOT_DB_PATH)
         _lp_db.row_factory = aiosqlite.Row
         await _lp_db.execute("PRAGMA journal_mode=WAL")
+        await _lp_db.execute("PRAGMA synchronous=NORMAL")
+        await _lp_db.execute("PRAGMA cache_size=-8000")
+        await _lp_db.execute("PRAGMA temp_store=MEMORY")
         await _lp_db.execute("PRAGMA foreign_keys=ON")
         await _lp_db.executescript(SCHEMA_SQL)
         await _run_migrations(_lp_db)

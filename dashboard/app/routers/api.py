@@ -69,23 +69,36 @@ async def activity_stream_sse(request: Request, last_id: int = 0):
                     "data": json.dumps(event),
                 }
 
-        # --- Phase 2: Live polling every 5 seconds ---
-        while True:
-            await asyncio.sleep(5)
+        # --- Phase 2: Live polling every 10 seconds ---
+        missed_polls = 0
+        while missed_polls < 6:  # Auto-close after ~60s of no new data
+            await asyncio.sleep(10)
 
             # Check if client disconnected
             if await request.is_disconnected():
                 break
 
-            cursor = await db.execute(
-                """SELECT id, action_type, sender_name, lead_name, lead_url,
-                          campaign_id, status, details, created_at
-                     FROM activity_log
-                    WHERE id > ?
-                 ORDER BY id ASC""",
-                (last_id,),
-            )
-            rows = await cursor.fetchall()
+            try:
+                cursor = await db.execute(
+                    """SELECT id, action_type, sender_name, lead_name, lead_url,
+                              campaign_id, status, details, created_at
+                         FROM activity_log
+                        WHERE id > ?
+                     ORDER BY id ASC
+                     LIMIT 20""",
+                    (last_id,),
+                )
+                rows = await cursor.fetchall()
+            except Exception:
+                break
+
+            if not rows:
+                missed_polls += 1
+                # Send keepalive ping so browser knows connection is alive
+                yield {"event": "ping", "data": ""}
+                continue
+
+            missed_polls = 0
             for row in rows:
                 event = {
                     "id": row["id"],
@@ -104,7 +117,7 @@ async def activity_stream_sse(request: Request, last_id: int = 0):
                     "data": json.dumps(event),
                 }
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(event_generator(), ping=30)
 
 
 @router.get("/api/stats")
