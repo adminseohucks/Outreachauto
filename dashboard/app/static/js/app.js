@@ -67,7 +67,10 @@ function updateStats(stats) {
         if (el) el.textContent = val;
     }
     const ts = document.getElementById('stat-timestamp');
-    if (ts) ts.textContent = 'Updated: ' + stats.timestamp;
+    if (ts) {
+        const displayTime = stats.timestamp || new Date().toLocaleTimeString();
+        ts.textContent = 'Updated: ' + displayTime;
+    }
 }
 
 function statusBadge(status) {

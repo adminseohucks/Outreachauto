@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -163,6 +163,7 @@ async def api_stats(request: Request):
         "active_campaigns": active_campaigns,
         "active_senders": active_senders,
         "total_actions_pending": total_actions_pending,
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
     })
 
 
