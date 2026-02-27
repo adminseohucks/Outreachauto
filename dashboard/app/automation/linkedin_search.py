@@ -379,8 +379,10 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
 
     if (!csrfToken) return { error: 'No CSRF token — not logged in? Please open LinkedIn and login first.' };
 
-    // Clean keywords: remove quotes, normalize whitespace
-    const cleanKeywords = keywords.replace(/"/g, '').replace(/\\s+/g, ' ').trim();
+    // Clean keywords: normalize whitespace but PRESERVE quotes for boolean search
+    // LinkedIn supports: "exact phrase", OR, AND, NOT, () operators
+    // Quotes are encoded as %22 by encodeURIComponent which LinkedIn handles fine
+    const cleanKeywords = keywords.replace(/\\s+/g, ' ').trim();
     const keywordsPart = cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '';
     const filtersStr = filtersList || '(key:resultType,value:List(PEOPLE))';
 
@@ -422,7 +424,11 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
                 data._usedQueryId = qid;
                 return data;
             }
-            lastError = 'queryId ' + qid.split('.')[1].substring(0,8) + '... returned ' + resp.status;
+            let body = '';
+            try { body = await resp.text(); } catch(e) {}
+            lastError = 'queryId ' + qid.split('.')[1].substring(0,8) + '... returned ' + resp.status +
+                '\\nRequest URL: ' + url.substring(0, 300) +
+                '\\nResponse body: ' + body.substring(0, 200);
         } catch (e) {
             lastError = e.message;
         }
