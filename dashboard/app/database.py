@@ -283,6 +283,18 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         )
     """)
 
+    # --- v2.2: predefined_comments table (created via SCHEMA_SQL for fresh DBs) ---
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS predefined_comments (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            text        TEXT NOT NULL,
+            category    TEXT DEFAULT 'general',
+            is_active   INTEGER DEFAULT 1,
+            usage_count INTEGER DEFAULT 0,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     await db.commit()
 
 
