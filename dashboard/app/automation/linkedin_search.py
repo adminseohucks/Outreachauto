@@ -33,44 +33,45 @@ async (locationText) => {
         ?.replace(/"/g, '') || '';
     if (!csrfToken) return { error: 'No CSRF token — not logged in?' };
 
-    try {
-        const resp = await fetch(
-            'https://www.linkedin.com/voyager/api/typeahead/hitsV2?' +
-            new URLSearchParams({
-                keywords: locationText,
-                origin: 'GLOBAL_SEARCH_HEADER',
-                q: 'type',
-                type: 'GEO',
-            }).toString(),
-            {
+    // Try multiple typeahead endpoints (LinkedIn changes these periodically)
+    const urls = [
+        'https://www.linkedin.com/voyager/api/typeahead/hitsV2?' +
+            new URLSearchParams({ keywords: locationText, origin: 'GLOBAL_SEARCH_HEADER', q: 'type', type: 'GEO', count: '10' }).toString(),
+        'https://www.linkedin.com/voyager/api/graphql?variables=(query:' + encodeURIComponent(locationText) +
+            ',type:GEO,count:10)&queryId=voyagerSearchDashTypeaheadByGlobalTypeahead.bcc3b0a84a2a75b7e5c67c0808245e61',
+    ];
+
+    for (const url of urls) {
+        try {
+            const resp = await fetch(url, {
                 headers: {
                     'csrf-token': csrfToken,
-                    'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                    'x-restli-protocol-version': '2.0.0',
                 },
                 credentials: 'include',
+            });
+            if (!resp.ok) continue;
+            const data = await resp.json();
+
+            // Check included array (normalized format)
+            const included = data?.included || [];
+            for (const el of included) {
+                const urn = el?.entityUrn || el?.targetUrn || '';
+                if (urn.includes('geo:')) return { geoUrn: urn };
             }
-        );
-        if (!resp.ok) return { error: 'Geo lookup returned ' + resp.status };
-        const data = await resp.json();
 
-        // Extract geo URN from included array
-        const included = data?.included || [];
-        for (const el of included) {
-            const urn = el?.entityUrn || el?.targetUrn || '';
-            if (urn.includes('geo:')) return { geoUrn: urn };
+            // Check data.elements (denormalized format)
+            const elements = data?.data?.elements || data?.elements || [];
+            for (const el of elements) {
+                const urn = el?.targetUrn || el?.entityUrn || '';
+                if (urn.includes('geo:')) return { geoUrn: urn };
+            }
+        } catch (e) {
+            continue;
         }
-
-        // Fallback: check data.data.elements
-        const elements = data?.data?.elements || [];
-        for (const el of elements) {
-            const urn = el?.targetUrn || el?.entityUrn || '';
-            if (urn.includes('geo:')) return { geoUrn: urn };
-        }
-
-        return { error: 'No geo URN found for: ' + locationText };
-    } catch (e) {
-        return { error: e.message };
     }
+
+    return { error: 'No geo URN found for: ' + locationText };
 }
 """
 
@@ -106,7 +107,6 @@ async ({ keywords, start, count, filtersList }) => {
         const resp = await fetch(url, {
             headers: {
                 'csrf-token': csrfToken,
-                'accept': 'application/vnd.linkedin.normalized+json+2.1',
                 'x-restli-protocol-version': '2.0.0',
             },
             credentials: 'include',
@@ -174,6 +174,11 @@ def _build_filters_list(
     return ",".join(filters)
 
 
+def _get_type(item: dict) -> str:
+    """Get the type string from an item, checking both _type and $type keys."""
+    return item.get("_type", "") or item.get("$type", "")
+
+
 def _parse_search_results(raw_data: dict) -> list[dict]:
     """Parse GraphQL Voyager search response into clean lead dicts.
 
@@ -189,36 +194,48 @@ def _parse_search_results(raw_data: dict) -> list[dict]:
 
     # --- Parse GraphQL response format ---
     data_section = raw_data.get("data", {})
-    clusters = data_section.get("searchDashClustersByAll", {})
+    if not isinstance(data_section, dict):
+        data_section = {}
+
+    # Try multiple possible keys for the clusters data
+    clusters = (
+        data_section.get("searchDashClustersByAll")
+        or data_section.get("searchClustersByAll")
+        or data_section.get("searchDashTypeaheadByGlobalTypeahead")
+        or {}
+    )
 
     if not clusters:
+        # Log actual keys for debugging
+        data_keys = list(data_section.keys())[:15] if data_section else []
         logger.warning(
-            "No searchDashClustersByAll in response. Top keys: %s",
+            "No searchDashClustersByAll in response. data keys: %s, top keys: %s",
+            data_keys,
             list(raw_data.keys())[:10],
         )
-        # Fallback: try the old 'included' format
+        # Fallback: try the 'included' format (normalized response)
         return _parse_included_format(raw_data)
 
-    cluster_type = clusters.get("_type", "")
+    cluster_type = _get_type(clusters)
     if cluster_type and "CollectionResponse" not in cluster_type:
         logger.warning("Unexpected cluster type: %s", cluster_type)
 
     for cluster_element in clusters.get("elements", []):
-        c_type = cluster_element.get("_type", "")
-        if "SearchClusterViewModel" not in c_type:
+        c_type = _get_type(cluster_element)
+        if c_type and "SearchClusterViewModel" not in c_type:
             continue
 
         for search_item in cluster_element.get("items", []):
-            s_type = search_item.get("_type", "")
-            if "SearchItem" not in s_type:
+            s_type = _get_type(search_item)
+            if s_type and "SearchItem" not in s_type:
                 continue
 
             entity = search_item.get("item", {}).get("entityResult", {})
-            if not entity:
+            if not entity or not isinstance(entity, dict):
                 continue
 
-            e_type = entity.get("_type", "")
-            if "EntityResultViewModel" not in e_type:
+            e_type = _get_type(entity)
+            if e_type and "EntityResultViewModel" not in e_type:
                 continue
 
             profile = _extract_from_entity_result(entity)
@@ -226,19 +243,41 @@ def _parse_search_results(raw_data: dict) -> list[dict]:
                 if not any(l["profile_url"] == profile["profile_url"] for l in leads):
                     leads.append(profile)
 
+    if not leads:
+        logger.info(
+            "Denormalized parse found 0 leads, trying included fallback (included count: %d)",
+            len(raw_data.get("included", [])),
+        )
+        return _parse_included_format(raw_data)
+
     return leads
 
 
 def _parse_included_format(raw_data: dict) -> list[dict]:
-    """Fallback parser for the older 'included' array response format."""
+    """Fallback parser for the normalized 'included' array response format.
+
+    In normalized responses, entities are flattened into the 'included' array
+    with URN references. We scan for EntityResultViewModel and MiniProfile types.
+    """
     leads = []
     included = raw_data.get("included", [])
 
     if not included:
         return leads
 
+    # Log types found in included for debugging
+    type_counts: dict[str, int] = {}
     for item in included:
-        recipe = item.get("$type", "")
+        recipe = _get_type(item)
+        if recipe:
+            short = recipe.rsplit(".", 1)[-1] if "." in recipe else recipe
+            type_counts[short] = type_counts.get(short, 0) + 1
+
+    if type_counts:
+        logger.info("Included array types: %s", type_counts)
+
+    for item in included:
+        recipe = _get_type(item)
         profile = None
 
         if "EntityResultViewModel" in recipe or "EntityResult" in recipe:
@@ -250,39 +289,48 @@ def _parse_included_format(raw_data: dict) -> list[dict]:
             if not any(l["profile_url"] == profile["profile_url"] for l in leads):
                 leads.append(profile)
 
+    logger.info("Included format parser found %d leads from %d items", len(leads), len(included))
     return leads
+
+
+def _safe_text(value) -> str:
+    """Extract text from a field that may be a dict with 'text' key or a string."""
+    if isinstance(value, dict):
+        return value.get("text", "") or ""
+    if isinstance(value, str):
+        return value
+    return ""
 
 
 def _extract_from_entity_result(item: dict, entities: dict | None = None) -> Optional[dict]:
     """Extract lead from EntityResultViewModel."""
-    title_data = item.get("title", {})
-    full_name = title_data.get("text", "") if isinstance(title_data, dict) else str(title_data)
+    full_name = _safe_text(item.get("title", ""))
+    headline = _safe_text(item.get("primarySubtitle", ""))
+    location = _safe_text(item.get("secondarySubtitle", ""))
 
-    summary_data = item.get("primarySubtitle", {})
-    headline = summary_data.get("text", "") if isinstance(summary_data, dict) else str(summary_data)
-
-    location_data = item.get("secondarySubtitle", {})
-    location = location_data.get("text", "") if isinstance(location_data, dict) else str(location_data)
-
-    # Get profile URL from navigationUrl or entityUrn
+    # Get profile URL from navigationUrl
     nav_url = item.get("navigationUrl", "")
     profile_url = ""
-    if "/in/" in nav_url:
+    if isinstance(nav_url, str) and "/in/" in nav_url:
         profile_url = nav_url.split("?")[0]
         if not profile_url.startswith("https://"):
             profile_url = "https://www.linkedin.com" + profile_url
 
+    # Fallback: try entityUrn to build URL
     if not profile_url:
-        # Try to extract from entityUrn
         urn = item.get("entityUrn", "")
-        if urn:
-            # urn format: urn:li:fsd_profile:ACoAAXXXX
-            parts = urn.split(":")
-            if len(parts) >= 4:
-                member_id = parts[-1]
-                # We need the vanity name, not the member ID
-                # Skip if we can't get a proper URL
-                pass
+        if isinstance(urn, str) and "fsd_profile" in urn:
+            # urn:li:fsd_profile:ACoAAXXXXXX — use member URN-based URL
+            member_id = urn.rsplit(":", 1)[-1] if ":" in urn else ""
+            if member_id:
+                profile_url = f"https://www.linkedin.com/in/{member_id}"
+
+    # Another fallback: try tracking info for publicIdentifier
+    tracking = item.get("entityCustomTrackingInfo", {})
+    if not profile_url and isinstance(tracking, dict):
+        member_distance = tracking.get("memberDistance", "")
+        # Some results include a publicIdentifier in the navigationUrl
+        pass
 
     if not full_name or not profile_url:
         return None

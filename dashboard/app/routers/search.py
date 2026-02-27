@@ -148,7 +148,7 @@ async def run_search(
 
 
 @router.get("/search/geo-lookup")
-async def geo_lookup(request: Request, q: str = "", sender_id: int = 0):
+async def geo_lookup(request: Request, q: str = "", sender_id: str = ""):
     """Live location autocomplete using LinkedIn's typeahead API.
 
     Called by the search form's location input as the user types.
@@ -157,7 +157,13 @@ async def geo_lookup(request: Request, q: str = "", sender_id: int = 0):
     if not q or len(q) < 2:
         return JSONResponse([])
 
-    if not sender_id or not browser_manager.is_open(sender_id):
+    # Parse sender_id safely (JS may send empty string)
+    try:
+        sid = int(sender_id) if sender_id else 0
+    except (ValueError, TypeError):
+        sid = 0
+
+    if not sid or not browser_manager.is_open(sid):
         # Find any open sender as fallback
         db = await get_lp_db()
         cursor = await db.execute(
@@ -165,9 +171,9 @@ async def geo_lookup(request: Request, q: str = "", sender_id: int = 0):
         )
         for row in await cursor.fetchall():
             if browser_manager.is_open(row["id"]):
-                sender_id = row["id"]
+                sid = row["id"]
                 break
-        if not sender_id or not browser_manager.is_open(sender_id):
+        if not sid or not browser_manager.is_open(sid):
             return JSONResponse([])
 
     GEO_TYPEAHEAD_JS = """
@@ -179,68 +185,70 @@ async def geo_lookup(request: Request, q: str = "", sender_id: int = 0):
             ?.replace(/"/g, '') || '';
         if (!csrfToken) return [];
 
-        try {
-            const resp = await fetch(
-                'https://www.linkedin.com/voyager/api/typeahead/hitsV2?' +
-                new URLSearchParams({
-                    keywords: query,
-                    origin: 'GLOBAL_SEARCH_HEADER',
-                    q: 'type',
-                    type: 'GEO',
-                    count: '10',
-                }).toString(),
-                {
+        // Try multiple typeahead endpoints
+        const urls = [
+            'https://www.linkedin.com/voyager/api/typeahead/hitsV2?' +
+                new URLSearchParams({ keywords: query, origin: 'GLOBAL_SEARCH_HEADER', q: 'type', type: 'GEO', count: '10' }).toString(),
+            'https://www.linkedin.com/voyager/api/graphql?variables=(query:' + encodeURIComponent(query) +
+                ',type:GEO,count:10)&queryId=voyagerSearchDashTypeaheadByGlobalTypeahead.bcc3b0a84a2a75b7e5c67c0808245e61',
+        ];
+
+        for (const url of urls) {
+            try {
+                const resp = await fetch(url, {
                     headers: {
                         'csrf-token': csrfToken,
-                        'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                        'x-restli-protocol-version': '2.0.0',
                     },
                     credentials: 'include',
-                }
-            );
-            if (!resp.ok) return [];
-            const data = await resp.json();
+                });
+                if (!resp.ok) continue;
+                const data = await resp.json();
 
-            const results = [];
-            const included = data?.included || [];
-            const elements = data?.data?.elements || [];
+                const results = [];
+                const included = data?.included || [];
+                const elements = data?.data?.elements || data?.elements || [];
 
-            // Match included items with elements to get both name and URN
-            const urnToName = {};
-            for (const el of included) {
-                const urn = el?.entityUrn || '';
-                const name = el?.defaultLocalizedName || el?.text?.text || el?.name || '';
-                if (urn && name) urnToName[urn] = name;
-            }
-
-            for (const el of elements) {
-                const urn = el?.targetUrn || '';
-                const displayText = el?.displayText?.text || el?.text?.text || '';
-                const name = displayText || urnToName[urn] || '';
-                if (urn && urn.includes('geo:') && name) {
-                    results.push({ name: name, geoUrn: urn });
-                }
-            }
-
-            // Fallback: if elements empty, use included directly
-            if (results.length === 0) {
+                // Build URN→name map from included
+                const urnToName = {};
                 for (const el of included) {
-                    const urn = el?.entityUrn || el?.targetUrn || '';
-                    const name = el?.defaultLocalizedName || el?.text?.text || '';
+                    const urn = el?.entityUrn || '';
+                    const name = el?.defaultLocalizedName || el?.text?.text || el?.name || '';
+                    if (urn && name) urnToName[urn] = name;
+                }
+
+                // Parse elements
+                for (const el of elements) {
+                    const urn = el?.targetUrn || el?.entityUrn || '';
+                    const displayText = el?.displayText?.text || el?.text?.text || '';
+                    const name = displayText || urnToName[urn] || '';
                     if (urn && urn.includes('geo:') && name) {
                         results.push({ name: name, geoUrn: urn });
                     }
                 }
-            }
 
-            return results;
-        } catch (e) {
-            return [];
+                // Fallback: use included directly
+                if (results.length === 0) {
+                    for (const el of included) {
+                        const urn = el?.entityUrn || el?.targetUrn || '';
+                        const name = el?.defaultLocalizedName || el?.text?.text || '';
+                        if (urn && urn.includes('geo:') && name) {
+                            results.push({ name: name, geoUrn: urn });
+                        }
+                    }
+                }
+
+                if (results.length > 0) return results;
+            } catch (e) {
+                continue;
+            }
         }
+        return [];
     }
     """
 
     try:
-        page = await browser_manager.get_page(sender_id)
+        page = await browser_manager.get_page(sid)
         results = await page.evaluate(GEO_TYPEAHEAD_JS, q)
         return JSONResponse(results or [])
     except Exception as exc:
