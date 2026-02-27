@@ -8,14 +8,6 @@
         <p>All your leads across all lists. Add manually, upload CSV, or import from search results.</p>
     </hgroup>
 
-    <!-- Action buttons row -->
-    <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-        <button onclick="openModal('add-lead-modal')">+ Add Lead</button>
-        <button class="secondary" onclick="openModal('upload-csv-modal')">Upload CSV</button>
-        <button class="outline secondary" id="btn-add-to-list" onclick="addToList()" disabled>Add to List</button>
-        <button class="outline" id="btn-delete" style="color: var(--lp-red, #e53e3e); border-color: var(--lp-red, #e53e3e);" onclick="deleteSelected()" disabled>Delete Selected</button>
-    </div>
-
     <!-- Filter bar -->
     <form method="get" action="/leads" class="filter-bar">
         <div class="filter-group">
@@ -43,39 +35,81 @@
                 {% endfor %}
             </select>
         </div>
+        <div class="filter-group">
+            <label for="filter-source">Source</label>
+            <select id="filter-source" name="source">
+                <option value="">All Sources</option>
+                {% for src in sources|default([]) %}
+                <option value="{{ src }}" {% if filters.source == src %}selected{% endif %}>{{ src }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="filter-status">Status</label>
+            <select id="filter-status" name="status">
+                <option value="">All Statuses</option>
+                {% for st in statuses|default([]) %}
+                <option value="{{ st }}" {% if filters.status == st %}selected{% endif %}>{{ st }}</option>
+                {% endfor %}
+            </select>
+        </div>
         <div class="filter-group" style="flex-direction: row; gap: 0.5rem;">
             <button type="submit">Filter</button>
             <a href="/leads" role="button" class="secondary outline">Clear</a>
         </div>
     </form>
 
-    <!-- Export CSV (hidden form with current filters) -->
-    <form method="post" action="/leads/export-csv" id="export-form" style="display: inline;">
+    <!-- ======= BULK TOOLBAR ======= -->
+    <div class="bulk-toolbar" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; padding: 0.75rem 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; background: var(--pico-card-background-color);">
+        <button onclick="openModal('add-lead-modal')" style="font-size: 0.85rem;">+ Add Lead</button>
+        <button class="secondary" onclick="openModal('upload-csv-modal')" style="font-size: 0.85rem;">Upload CSV</button>
+        <span style="border-left: 1px solid var(--pico-muted-border-color); height: 1.5rem;"></span>
+        <button class="outline" onclick="selectAll()" style="font-size: 0.85rem;" type="button">Select All</button>
+        <button class="outline secondary" onclick="deselectAll()" style="font-size: 0.85rem;" type="button">Deselect All</button>
+        <span style="border-left: 1px solid var(--pico-muted-border-color); height: 1.5rem;"></span>
+        <button class="outline secondary" id="btn-add-to-list" onclick="addToList()" disabled style="font-size: 0.85rem;">Add to List</button>
+        <button class="outline" id="btn-delete" style="color: var(--lp-red, #e53e3e); border-color: var(--lp-red, #e53e3e); font-size: 0.85rem;" onclick="deleteSelected()" disabled>Delete Selected (<span id="sel-count">0</span>)</button>
+        <button class="outline" id="btn-delete-all" style="color: var(--lp-red, #e53e3e); border-color: var(--lp-red, #e53e3e); font-size: 0.85rem;" onclick="deleteAllFiltered()">Delete All Filtered ({{ total }})</button>
+        <span style="border-left: 1px solid var(--pico-muted-border-color); height: 1.5rem;"></span>
+        <form method="post" action="/leads/export-csv" style="display: inline; margin: 0;">
+            <input type="hidden" name="search" value="{{ filters.search or '' }}">
+            <input type="hidden" name="company" value="{{ filters.company or '' }}">
+            <input type="hidden" name="location" value="{{ filters.location or '' }}">
+            <input type="hidden" name="title" value="{{ filters.title or '' }}">
+            <input type="hidden" name="list_id" value="{{ filters.list_id or 0 }}">
+            <button type="submit" class="outline" style="font-size: 0.85rem;">Export CSV</button>
+        </form>
+    </div>
+
+    <!-- Hidden form for delete-all-filtered -->
+    <form method="post" action="/leads/delete-filtered" id="delete-filtered-form" style="display: none;">
         <input type="hidden" name="search" value="{{ filters.search or '' }}">
         <input type="hidden" name="company" value="{{ filters.company or '' }}">
         <input type="hidden" name="location" value="{{ filters.location or '' }}">
         <input type="hidden" name="title" value="{{ filters.title or '' }}">
         <input type="hidden" name="list_id" value="{{ filters.list_id or 0 }}">
-        <button type="submit" class="outline" style="font-size: 0.85rem; margin-bottom: 1rem;">Export CSV</button>
+        <input type="hidden" name="source" value="{{ filters.source or '' }}">
+        <input type="hidden" name="status" value="{{ filters.status or '' }}">
     </form>
 
     <!-- Leads table -->
     <table class="data-table">
         <thead>
             <tr>
-                <th><input type="checkbox" onchange="toggleSelectAll(this)"></th>
+                <th><input type="checkbox" id="master-cb" onchange="toggleSelectAll(this)"></th>
                 <th>Name</th>
                 <th>Title</th>
                 <th>Company</th>
                 <th>Location</th>
                 <th>List</th>
                 <th>Source</th>
+                <th>Status</th>
             </tr>
         </thead>
         <tbody>
             {% for lead in leads %}
             <tr>
-                <td><input type="checkbox" class="lead-cb" value="{{ lead.id }}" onchange="updateBulkButtons()"></td>
+                <td><input type="checkbox" class="lead-cb" value="{{ lead.id }}" data-source="{{ lead.source or '' }}" data-status="{{ lead.status or 'new' }}" onchange="updateBulkButtons()"></td>
                 <td>
                     {% if lead.profile_url %}
                     <a href="{{ lead.profile_url }}" target="_blank" rel="noopener">{{ lead.full_name }}</a>
@@ -94,12 +128,16 @@
                     {% endif %}
                 </td>
                 <td><span class="badge badge-{{ lead.source or 'pending' }}" style="font-size: 0.65rem;">{{ lead.source or 'unknown' }}</span></td>
+                <td>
+                    {% set st = lead.status or 'new' %}
+                    <span class="badge badge-status-{{ st }}" style="font-size: 0.65rem;">{{ st }}</span>
+                </td>
             </tr>
             {% else %}
             <tr>
-                <td colspan="7" style="text-align: center; padding: 2rem;">
+                <td colspan="8" style="text-align: center; padding: 2rem;">
                     <strong>No leads found.</strong><br>
-                    <small>Add leads manually, upload a CSV, or import from OpenOutreach.</small>
+                    <small>Add leads manually, upload a CSV, or search LinkedIn.</small>
                 </td>
             </tr>
             {% endfor %}
@@ -108,15 +146,16 @@
 
     <!-- Pagination -->
     {% if pages > 1 %}
+    {% set fq = 'search=' ~ (filters.search or '') ~ '&company=' ~ (filters.company or '') ~ '&location=' ~ (filters.location or '') ~ '&title=' ~ (filters.title or '') ~ '&list_id=' ~ (filters.list_id or 0) ~ '&source=' ~ (filters.source or '') ~ '&status=' ~ (filters.status or '') %}
     <nav class="pagination">
         {% if page > 1 %}
-        <a href="/leads?page={{ page - 1 }}&search={{ filters.search or '' }}&company={{ filters.company or '' }}&location={{ filters.location or '' }}&title={{ filters.title or '' }}&list_id={{ filters.list_id or 0 }}">Previous</a>
+        <a href="/leads?page={{ page - 1 }}&{{ fq }}">Previous</a>
         {% endif %}
         {% for p in range(1, pages + 1) %}
             {% if p == page %}
             <a href="#" class="current">{{ p }}</a>
             {% elif p <= 3 or p > pages - 2 or (p >= page - 1 and p <= page + 1) %}
-            <a href="/leads?page={{ p }}&search={{ filters.search or '' }}&company={{ filters.company or '' }}&location={{ filters.location or '' }}&title={{ filters.title or '' }}&list_id={{ filters.list_id or 0 }}">{{ p }}</a>
+            <a href="/leads?page={{ p }}&{{ fq }}">{{ p }}</a>
             {% elif p == 4 and page > 5 %}
             <span>...</span>
             {% elif p == pages - 2 and page < pages - 4 %}
@@ -124,7 +163,7 @@
             {% endif %}
         {% endfor %}
         {% if page < pages %}
-        <a href="/leads?page={{ page + 1 }}&search={{ filters.search or '' }}&company={{ filters.company or '' }}&location={{ filters.location or '' }}&title={{ filters.title or '' }}&list_id={{ filters.list_id or 0 }}">Next</a>
+        <a href="/leads?page={{ page + 1 }}&{{ fq }}">Next</a>
         {% endif %}
     </nav>
     {% endif %}
@@ -271,6 +310,20 @@ function toggleSelectAll(master) {
     updateBulkButtons();
 }
 
+function selectAll() {
+    document.querySelectorAll('.lead-cb').forEach(cb => cb.checked = true);
+    var m = document.getElementById('master-cb');
+    if (m) m.checked = true;
+    updateBulkButtons();
+}
+
+function deselectAll() {
+    document.querySelectorAll('.lead-cb').forEach(cb => cb.checked = false);
+    var m = document.getElementById('master-cb');
+    if (m) m.checked = false;
+    updateBulkButtons();
+}
+
 function getSelectedIds() {
     return Array.from(document.querySelectorAll('.lead-cb:checked')).map(cb => cb.value);
 }
@@ -279,6 +332,7 @@ function updateBulkButtons() {
     const count = getSelectedIds().length;
     document.getElementById('btn-add-to-list').disabled = count === 0;
     document.getElementById('btn-delete').disabled = count === 0;
+    document.getElementById('sel-count').textContent = count;
 }
 
 function addToList() {
@@ -304,6 +358,14 @@ function deleteSelected() {
     form.appendChild(input);
     document.body.appendChild(form);
     form.submit();
+}
+
+function deleteAllFiltered() {
+    var total = {{ total }};
+    if (!total) { alert('No leads match the current filters.'); return; }
+    var msg = 'Delete ALL ' + total + ' lead(s) matching the current filters? This cannot be undone.';
+    if (!confirm(msg)) return;
+    document.getElementById('delete-filtered-form').submit();
 }
 
 // --- CSV Upload ---

@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS custom_list_leads (
     profile_url     TEXT NOT NULL,
     source          TEXT DEFAULT 'openoutreach',
     openoutreach_lead_id  INTEGER DEFAULT NULL,
+    status          TEXT DEFAULT 'new' CHECK(status IN ('new','liked','commented','connected','replied')),
     is_liked        INTEGER DEFAULT 0,
     is_commented    INTEGER DEFAULT 0,
     last_action_at  DATETIME,
@@ -262,6 +263,10 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     )
     # connect_note column on action_queue
     await _safe_add_column(db, "action_queue", "connect_note", "TEXT DEFAULT NULL")
+
+    # --- v2.2: status column on custom_list_leads ---
+    await _safe_add_column(db, "custom_list_leads", "status",
+                           "TEXT DEFAULT 'new'")
 
     # --- v2.1: Add connect limit columns to senders ---
     await _safe_add_column(db, "senders", "daily_connect_limit", "INTEGER DEFAULT 25")

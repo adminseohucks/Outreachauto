@@ -30,6 +30,8 @@ async def leads_page(
     location: str = "",
     title: str = "",
     list_id: int = 0,
+    source: str = "",
+    status: str = "",
     page: int = 1,
 ):
     """Lead browser with filtering and pagination — reads from custom_list_leads."""
@@ -58,6 +60,12 @@ async def leads_page(
     if list_id:
         conditions.append("cll.list_id = ?")
         params.append(list_id)
+    if source:
+        conditions.append("cll.source = ?")
+        params.append(source)
+    if status:
+        conditions.append("cll.status = ?")
+        params.append(status)
 
     where = ""
     if conditions:
@@ -90,6 +98,17 @@ async def leads_page(
     cursor = await db.execute("SELECT id, name FROM custom_lists ORDER BY name")
     lists = [dict(r) for r in await cursor.fetchall()]
 
+    # Get distinct sources and statuses for filter dropdowns
+    cursor = await db.execute(
+        "SELECT DISTINCT source FROM custom_list_leads WHERE source IS NOT NULL ORDER BY source"
+    )
+    sources = [row["source"] for row in await cursor.fetchall()]
+
+    cursor = await db.execute(
+        "SELECT DISTINCT status FROM custom_list_leads WHERE status IS NOT NULL ORDER BY status"
+    )
+    statuses = [row["status"] for row in await cursor.fetchall()]
+
     return templates.TemplateResponse("leads.html", {
         "request": request,
         "leads": leads,
@@ -103,8 +122,12 @@ async def leads_page(
             "location": location,
             "title": title,
             "list_id": list_id,
+            "source": source,
+            "status": status,
         },
         "lists": lists,
+        "sources": sources,
+        "statuses": statuses,
         "active_page": "leads",
     })
 
@@ -364,6 +387,80 @@ async def delete_leads(request: Request, lead_ids: str = Form("")):
     await db.execute(
         f"DELETE FROM custom_list_leads WHERE id IN ({placeholders})", ids
     )
+
+    # Update counts for affected lists
+    for lid in affected_lists:
+        cursor = await db.execute(
+            "SELECT COUNT(*) AS cnt FROM custom_list_leads WHERE list_id = ?", (lid,)
+        )
+        row = await cursor.fetchone()
+        await db.execute(
+            "UPDATE custom_lists SET lead_count = ? WHERE id = ?",
+            (row["cnt"] if row else 0, lid),
+        )
+
+    await db.commit()
+    return RedirectResponse(url="/leads", status_code=303)
+
+
+# -----------------------------------------------------------------------
+# Delete ALL leads matching current filters (bulk filter delete)
+# -----------------------------------------------------------------------
+
+@router.post("/leads/delete-filtered")
+async def delete_filtered_leads(
+    request: Request,
+    search: str = Form(""),
+    company: str = Form(""),
+    location: str = Form(""),
+    title: str = Form(""),
+    list_id: int = Form(0),
+    source: str = Form(""),
+    status: str = Form(""),
+):
+    """Delete ALL leads that match the current filter criteria."""
+    db = await get_lp_db()
+
+    conditions = []
+    params = []
+
+    if search:
+        conditions.append(
+            "(full_name LIKE ? OR headline LIKE ? OR company LIKE ? OR profile_url LIKE ?)"
+        )
+        s = f"%{search}%"
+        params.extend([s, s, s, s])
+    if company:
+        conditions.append("company LIKE ?")
+        params.append(f"%{company}%")
+    if location:
+        conditions.append("location LIKE ?")
+        params.append(f"%{location}%")
+    if title:
+        conditions.append("headline LIKE ?")
+        params.append(f"%{title}%")
+    if list_id:
+        conditions.append("list_id = ?")
+        params.append(list_id)
+    if source:
+        conditions.append("source = ?")
+        params.append(source)
+    if status:
+        conditions.append("status = ?")
+        params.append(status)
+
+    where = ""
+    if conditions:
+        where = "WHERE " + " AND ".join(conditions)
+
+    # Get affected list IDs before deletion
+    cursor = await db.execute(
+        f"SELECT DISTINCT list_id FROM custom_list_leads {where}", params
+    )
+    affected_lists = [row["list_id"] for row in await cursor.fetchall()]
+
+    # Delete matching leads
+    await db.execute(f"DELETE FROM custom_list_leads {where}", params)
 
     # Update counts for affected lists
     for lid in affected_lists:

@@ -56,20 +56,52 @@ SUBMIT_COMMENT_SELECTORS = [
     'form.comments-comment-box__form button[type="submit"]',
 ]
 
+# Selectors for existing comment items in the comment section
+EXISTING_COMMENT_SELECTORS = [
+    "article.comments-comment-item",
+    "div.comments-comment-item",
+    "li.comments-comment-list__comment-item",
+    'div[data-urn*="comment"]',
+]
+
+EXISTING_COMMENT_TEXT_SELECTORS = [
+    "span.comments-comment-item__main-content",
+    "div.comments-comment-item__inline-show-more-text",
+    "span.feed-shared-text__text-view",
+    'span[dir="ltr"]',
+]
+
+# Comment count shown on the button (e.g. "12 Comments")
+COMMENT_COUNT_SELECTORS = [
+    'button[aria-label*="comment"] span.social-details-social-counts__reactions-count',
+    'button[aria-label*="Comment"] span',
+    'span.social-details-social-counts__comments',
+    'button.comment-button span',
+]
+
+# Minimum number of existing comments required before we post
+MIN_EXISTING_COMMENTS = 5
+
 
 async def extract_post_text(
     page: Page, profile_url: str
 ) -> Dict[str, Any]:
     """Navigate to *profile_url* and extract the text of the latest post.
 
+    Also extracts existing comments and their count for AI context and
+    minimum comment threshold enforcement.
+
     Returns
     -------
     dict
-        ``{post_text: str | None, post_url: str | None, error: str | None}``
+        ``{post_text, post_url, existing_comments: list[str],
+           comment_count: int, error}``
     """
     result: Dict[str, Any] = {
         "post_text": None,
         "post_url": None,
+        "existing_comments": [],
+        "comment_count": 0,
         "error": None,
     }
 
@@ -135,6 +167,23 @@ async def extract_post_text(
         result["error"] = "Could not extract post text"
         logger.warning(result["error"])
 
+    # ------------------------------------------------------------------
+    # Count and extract existing comments
+    # ------------------------------------------------------------------
+    comment_count = await _get_comment_count(post_element, page)
+    result["comment_count"] = comment_count
+
+    existing = await _extract_existing_comments(post_element, page)
+    result["existing_comments"] = existing
+    # Use the higher of the two as the true count
+    if len(existing) > comment_count:
+        result["comment_count"] = len(existing)
+
+    logger.info(
+        "Post has %d existing comments (extracted %d texts)",
+        result["comment_count"], len(existing),
+    )
+
     return result
 
 
@@ -143,21 +192,29 @@ async def comment_on_latest_post(
     profile_url: str,
     comment_text: str,
     company_page_name: str | None = None,
+    min_comments: int = MIN_EXISTING_COMMENTS,
 ) -> Dict[str, Any]:
     """Navigate to *profile_url*, find the latest post, and leave *comment_text*.
 
     If *company_page_name* is given, switches the commenting identity to that
     company page after opening the comment box.
 
+    If *min_comments* > 0 and the post has fewer than that many existing
+    comments, the action is skipped (returns ``skipped_low_comments=True``).
+
     Returns
     -------
     dict
-        ``{success: bool, post_text: str | None, post_url: str | None, error: str | None}``
+        ``{success, post_text, post_url, existing_comments, comment_count,
+           skipped_low_comments, error}``
     """
     result: Dict[str, Any] = {
         "success": False,
         "post_text": None,
         "post_url": None,
+        "existing_comments": [],
+        "comment_count": 0,
+        "skipped_low_comments": False,
         "error": None,
     }
 
@@ -222,6 +279,28 @@ async def comment_on_latest_post(
     # ------------------------------------------------------------------
     post_text = await _extract_text_from_post(post_element)
     result["post_text"] = post_text
+
+    # ------------------------------------------------------------------
+    # 4b. Check existing comments — enforce minimum threshold
+    # ------------------------------------------------------------------
+    comment_count = await _get_comment_count(post_element, page)
+    existing = await _extract_existing_comments(post_element, page)
+    result["comment_count"] = max(comment_count, len(existing))
+    result["existing_comments"] = existing
+
+    if min_comments > 0 and result["comment_count"] < min_comments:
+        result["skipped_low_comments"] = True
+        result["error"] = (
+            f"Post has only {result['comment_count']} comments "
+            f"(minimum {min_comments} required). Skipping."
+        )
+        logger.info(result["error"])
+        return result
+
+    logger.info(
+        "Post has %d existing comments — proceeding to comment",
+        result["comment_count"],
+    )
 
     # ------------------------------------------------------------------
     # 5. Click "Comment" button to open comment box
@@ -341,3 +420,71 @@ async def _extract_text_from_post(post_element) -> Optional[str]:
         except Exception:
             continue
     return None
+
+
+async def _get_comment_count(post_element, page: Page) -> int:
+    """Try to read the comment count from the social bar (e.g. '12 Comments').
+
+    Falls back to 0 if not found.
+    """
+    import re
+
+    for selector in COMMENT_COUNT_SELECTORS:
+        try:
+            # Search within the post first, then page-wide
+            el = await post_element.query_selector(selector)
+            if not el:
+                el = await page.query_selector(selector)
+            if el:
+                text = (await el.inner_text()).strip()
+                # Extract number from strings like "12 Comments" or "12"
+                match = re.search(r"(\d+)", text)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            continue
+
+    # Fallback: try to read the aria-label on the comment button
+    for selector in COMMENT_BUTTON_SELECTORS:
+        try:
+            btn = await post_element.query_selector(selector)
+            if btn:
+                label = await btn.get_attribute("aria-label") or ""
+                match = re.search(r"(\d+)\s*comment", label, re.IGNORECASE)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            continue
+
+    return 0
+
+
+async def _extract_existing_comments(post_element, page: Page) -> list[str]:
+    """Extract text of existing comments visible on the post.
+
+    Returns a list of comment text strings (up to 20 for context).
+    """
+    comments: list[str] = []
+
+    for selector in EXISTING_COMMENT_SELECTORS:
+        try:
+            elements = await post_element.query_selector_all(selector)
+            if not elements:
+                elements = await page.query_selector_all(selector)
+            for el in elements[:20]:  # cap at 20
+                for txt_sel in EXISTING_COMMENT_TEXT_SELECTORS:
+                    try:
+                        txt_el = await el.query_selector(txt_sel)
+                        if txt_el:
+                            text = (await txt_el.inner_text()).strip()
+                            if text and len(text) > 3:
+                                comments.append(text)
+                                break
+                    except Exception:
+                        continue
+            if comments:
+                break  # found via this selector
+        except Exception:
+            continue
+
+    return comments

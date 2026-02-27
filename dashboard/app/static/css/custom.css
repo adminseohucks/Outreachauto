@@ -103,6 +103,19 @@ nav a.active {
 .badge-pending { background: #f3f4f6; color: #6b7280; }
 .badge-waiting { background: #fef3c7; color: #92400e; }
 
+/* Lead source badges */
+.badge-manual { background: #e0e7ff; color: #3730a3; }
+.badge-search { background: #dbeafe; color: #1e40af; }
+.badge-csv_upload { background: #fef3c7; color: #92400e; }
+.badge-openoutreach { background: #dcfce7; color: #166534; }
+
+/* Lead status badges */
+.badge-status-new { background: #f3f4f6; color: #6b7280; }
+.badge-status-liked { background: #dbeafe; color: #1e40af; }
+.badge-status-commented { background: #dcfce7; color: #166534; }
+.badge-status-connected { background: #fae8ff; color: #86198f; }
+.badge-status-replied { background: #fef3c7; color: #92400e; }
+
 /* Activity feed */
 .activity-feed {
     max-height: 400px;

@@ -104,6 +104,7 @@ async def _execute_action(action: dict) -> bool:
         from app.automation.linkedin_comment import (
             comment_on_latest_post,
             extract_post_text,
+            MIN_EXISTING_COMMENTS,
         )
 
         comment_text = action.get("comment_text", "")
@@ -129,11 +130,31 @@ async def _execute_action(action: dict) -> bool:
 
             candidates = [r["text"] for r in comment_rows]
 
-            # 2. Try extracting post text for smarter AI selection
+            # 2. Extract post text + existing comments for context
             post_text = ""
+            existing_comments_text = ""
             try:
                 extract_result = await extract_post_text(page, profile_url)
                 post_text = extract_result.get("post_text") or ""
+                comment_count = extract_result.get("comment_count", 0)
+                existing_comments = extract_result.get("existing_comments", [])
+
+                # Enforce minimum comments check before AI selection
+                if comment_count < MIN_EXISTING_COMMENTS:
+                    logger.info(
+                        "Post has %d comments (min %d required). Skipping action %s.",
+                        comment_count, MIN_EXISTING_COMMENTS, action.get("id"),
+                    )
+                    return False  # treated as failure, scheduler marks it
+
+                if existing_comments:
+                    existing_comments_text = "\n".join(
+                        f"- {c}" for c in existing_comments[:10]
+                    )
+                    logger.info(
+                        "Extracted %d existing comments for AI context",
+                        len(existing_comments),
+                    )
                 if post_text:
                     logger.info(
                         "Extracted post text (%d chars) for AI comment selection",
@@ -142,8 +163,13 @@ async def _execute_action(action: dict) -> bool:
             except Exception as exc:
                 logger.warning("Post text extraction failed: %s", exc)
 
-            # 3. Ask AI to pick best comment (falls back to random if VPS down)
-            ai_result = await ask_ai_for_comment(post_text, candidates)
+            # 3. Build context with post text + existing comments
+            ai_context = post_text
+            if existing_comments_text:
+                ai_context += f"\n\nExisting comments on this post:\n{existing_comments_text}"
+
+            # 4. Ask AI to pick best comment (falls back to random if VPS down)
+            ai_result = await ask_ai_for_comment(ai_context, candidates)
             comment_text = ai_result.get("comment_text", "")
             confidence = ai_result.get("confidence", 0.0)
             selected_idx = ai_result.get("selected_index", -1)
@@ -158,7 +184,7 @@ async def _execute_action(action: dict) -> bool:
                 comment_text,
             )
 
-            # 4. Update action_queue with selected comment + bump usage_count
+            # 5. Update action_queue with selected comment + bump usage_count
             action_id = action.get("id")
             await db.execute(
                 "UPDATE action_queue SET comment_text = ? WHERE id = ?",
@@ -172,6 +198,12 @@ async def _execute_action(action: dict) -> bool:
             await db.commit()
 
         result = await comment_on_latest_post(page, profile_url, comment_text, company_page)
+
+        # Handle the "too few comments" skip case
+        if result.get("skipped_low_comments"):
+            logger.info("Comment skipped (low comment count) for %s", profile_url)
+            return False
+
         return result.get("success", False)
 
     elif action_type == "connect":
@@ -455,6 +487,23 @@ class CampaignScheduler:
                     await increment_counter(sender_id, action_type)
                     # Record in global_contact_registry for cross-sender cooldown
                     await self._record_cooldown(profile_url, sender_id, action_type)
+
+                    # Update lead status + flags in custom_list_leads
+                    lead_id = action.get("lead_id")
+                    if lead_id:
+                        status_map = {"like": "liked", "comment": "commented", "connect": "connected"}
+                        new_lead_status = status_map.get(action_type, "liked")
+                        flag_updates = []
+                        if action_type == "like":
+                            flag_updates.append("is_liked = 1")
+                        elif action_type == "comment":
+                            flag_updates.append("is_commented = 1")
+                        flag_sql = ", ".join(flag_updates) + ", " if flag_updates else ""
+                        await db.execute(
+                            f"UPDATE custom_list_leads SET {flag_sql}status = ?, last_action_at = ? WHERE id = ?",
+                            (new_lead_status, datetime.now(IST).isoformat(), lead_id),
+                        )
+                        await db.commit()
 
                 # ---- 3e cont. Log to activity_log ----
                 company_page = action.get("company_page_name", "")
