@@ -17,8 +17,9 @@ from playwright.async_api import Page
 
 logger = logging.getLogger(__name__)
 
-# queryId from linkedin-api v2.3.1 — this is the hash LinkedIn uses
-# to identify the "search clusters" GraphQL query.
+# queryId from linkedin-api v2.3.1 — LinkedIn rotates these hashes on redeploy.
+# SEARCH_JS now tries multiple hashes + dynamic extraction, so this constant
+# is kept only for reference.
 QUERY_ID = "voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0"
 
 # ---------------------------------------------------------------------------
@@ -295,11 +296,81 @@ async (locationText) => {
 """
 
 # ---------------------------------------------------------------------------
-# JavaScript to perform Voyager GraphQL people search with filters
-# Matches the format used by linkedin-api v2.3.1 (verified working)
+# JavaScript to extract the current queryId for search from LinkedIn's
+# JavaScript bundles.  LinkedIn rotates these hashes on redeploy, so
+# hardcoded values go stale.  We sniff the live page's JS modules.
+# ---------------------------------------------------------------------------
+EXTRACT_QUERY_ID_JS = """
+async () => {
+    // Strategy 1: Intercept from LinkedIn's module system (Ember-style define/require)
+    // LinkedIn registers modules with paths containing the queryId hashes.
+    try {
+        if (window.require && window.require.entries) {
+            const entries = Object.keys(window.require.entries);
+            for (const key of entries) {
+                if (key.includes('voyagerSearchDashClusters')) {
+                    // The key itself often IS the queryId
+                    const match = key.match(/voyagerSearchDashClusters\\.([a-f0-9]{32})/);
+                    if (match) return match[0]; // e.g. voyagerSearchDashClusters.abc123...
+                }
+            }
+        }
+    } catch(e) {}
+
+    // Strategy 2: Scan all <script> tags for the hash pattern
+    try {
+        const scripts = document.querySelectorAll('script[src]');
+        for (const script of scripts) {
+            try {
+                const resp = await fetch(script.src, { credentials: 'include' });
+                if (!resp.ok) continue;
+                const text = await resp.text();
+                const match = text.match(/voyagerSearchDashClusters\\.([a-f0-9]{32})/);
+                if (match) return match[0];
+            } catch(e) { continue; }
+        }
+    } catch(e) {}
+
+    // Strategy 3: Perform a real search via LinkedIn's UI search bar URL
+    // and intercept the queryId from the network request
+    try {
+        const csrfToken = document.cookie
+            .split('; ')
+            .find(c => c.startsWith('JSESSIONID='))
+            ?.split('=')[1]
+            ?.replace(/"/g, '') || '';
+        if (csrfToken) {
+            // Try the REST endpoint (non-GraphQL) which sometimes still works
+            const testUrl = 'https://www.linkedin.com/voyager/api/search/dash/clusters?' +
+                'decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175' +
+                '&origin=GLOBAL_SEARCH_HEADER&q=all' +
+                '&query=(flagshipSearchIntent:SEARCH_SRP,' +
+                'queryParameters:List((key:resultType,value:List(PEOPLE))))' +
+                '&start=0&count=1';
+            const resp = await fetch(testUrl, {
+                headers: {
+                    'csrf-token': csrfToken,
+                    'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                    'x-restli-protocol-version': '2.0.0',
+                },
+                credentials: 'include',
+            });
+            if (resp.ok) return '__REST_ENDPOINT__';
+        }
+    } catch(e) {}
+
+    return null;
+}
+"""
+
+# ---------------------------------------------------------------------------
+# JavaScript to perform Voyager GraphQL people search with filters.
+# Self-healing: tries multiple queryId hashes + REST endpoint fallback.
+# LinkedIn rotates queryId hashes on redeploy, so we try several known
+# hashes and also support dynamic extraction.
 # ---------------------------------------------------------------------------
 SEARCH_JS = """
-async ({ keywords, start, count, filtersList }) => {
+async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
     const csrfToken = document.cookie
         .split('; ')
         .find(c => c.startsWith('JSESSIONID='))
@@ -308,44 +379,81 @@ async ({ keywords, start, count, filtersList }) => {
 
     if (!csrfToken) return { error: 'No CSRF token — not logged in? Please open LinkedIn and login first.' };
 
-    // Build the variables portion matching linkedin-api format
-    // Format: (start:0,origin:GLOBAL_SEARCH_HEADER,query:(keywords:CEO,flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))
-    // Note: Remove double-quotes from keywords — LinkedIn's parentheses-based
-    // variable syntax breaks with URL-encoded quotes (%22). LinkedIn search
-    // handles OR/AND operators without quotes around individual terms.
-    const cleanKeywords = keywords.replace(/"/g, '').replace(/\s+/g, ' ').trim();
+    // Clean keywords: remove quotes, normalize whitespace
+    const cleanKeywords = keywords.replace(/"/g, '').replace(/\\s+/g, ' ').trim();
     const keywordsPart = cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '';
     const filtersStr = filtersList || '(key:resultType,value:List(PEOPLE))';
 
+    // --- GraphQL endpoint (primary) ---
     const variables = '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
         'query:(' + keywordsPart +
         'flagshipSearchIntent:SEARCH_SRP,' +
         'queryParameters:List(' + filtersStr + '),' +
         'includeFiltersInResponse:false))';
 
-    const queryId = 'voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0';
-    const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' + variables + '&queryId=' + queryId;
-
-    try {
-        const resp = await fetch(url, {
-            headers: {
-                'csrf-token': csrfToken,
-                'accept': 'application/vnd.linkedin.normalized+json+2.1',
-                'x-restli-protocol-version': '2.0.0',
-            },
-            credentials: 'include',
-        });
-
-        if (!resp.ok) {
-            let body = '';
-            try { body = await resp.text(); } catch(e) {}
-            return { error: 'API returned ' + resp.status + ' ' + resp.statusText, debugUrl: url.substring(0, 300), debugBody: body.substring(0, 500) };
-        }
-        const data = await resp.json();
-        return data;
-    } catch (e) {
-        return { error: e.message, debugUrl: url.substring(0, 300) };
+    // List of queryId hashes to try (dynamic first, then known hashes)
+    const queryIds = [];
+    if (dynamicQueryId && dynamicQueryId !== '__REST_ENDPOINT__') {
+        queryIds.push(dynamicQueryId);
     }
+    // Known hashes (newest first) — add new ones at the top when discovered
+    queryIds.push(
+        'voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0',
+        'voyagerSearchDashClusters.994bf4e7d2173b92ccdb5935710c3c5d',
+        'voyagerSearchDashClusters.52fec77d08aa4598c8a056ca6bce6c11',
+        'voyagerSearchDashClusters.1f5ea36a42fc3319f534af1022b6dd64',
+    );
+
+    const headers = {
+        'csrf-token': csrfToken,
+        'accept': 'application/vnd.linkedin.normalized+json+2.1',
+        'x-restli-protocol-version': '2.0.0',
+    };
+
+    let lastError = '';
+
+    // Try each queryId hash
+    for (const qid of queryIds) {
+        const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' + variables + '&queryId=' + qid;
+        try {
+            const resp = await fetch(url, { headers, credentials: 'include' });
+            if (resp.ok) {
+                const data = await resp.json();
+                data._usedQueryId = qid;
+                return data;
+            }
+            lastError = 'queryId ' + qid.split('.')[1].substring(0,8) + '... returned ' + resp.status;
+        } catch (e) {
+            lastError = e.message;
+        }
+    }
+
+    // --- REST endpoint fallback (non-GraphQL, older but sometimes still works) ---
+    try {
+        const restFilters = filtersStr;
+        const restQuery = '(flagshipSearchIntent:SEARCH_SRP,' +
+            (cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '') +
+            'queryParameters:List(' + restFilters + '))';
+        const restUrl = 'https://www.linkedin.com/voyager/api/search/dash/clusters?' +
+            'decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175' +
+            '&origin=GLOBAL_SEARCH_HEADER&q=all' +
+            '&query=' + restQuery +
+            '&start=' + start + '&count=' + count;
+        const resp = await fetch(restUrl, { headers, credentials: 'include' });
+        if (resp.ok) {
+            const data = await resp.json();
+            data._usedEndpoint = 'REST';
+            return data;
+        }
+        lastError += '; REST fallback returned ' + resp.status;
+    } catch(e) {
+        lastError += '; REST fallback: ' + e.message;
+    }
+
+    return {
+        error: 'All search endpoints failed. LinkedIn may have updated their API. Last: ' + lastError,
+        debugInfo: 'Tried ' + queryIds.length + ' GraphQL hashes + REST fallback'
+    };
 }
 """
 
@@ -699,6 +807,17 @@ async def search_people(
         company_size=company_size,
     )
 
+    # Try to dynamically extract the current queryId from LinkedIn's JS bundles
+    dynamic_query_id = None
+    try:
+        dynamic_query_id = await page.evaluate(EXTRACT_QUERY_ID_JS)
+        if dynamic_query_id:
+            logger.info("Dynamically extracted queryId: %s", dynamic_query_id)
+        else:
+            logger.info("Could not extract dynamic queryId, will try known hashes")
+    except Exception as exc:
+        logger.warning("queryId extraction failed: %s", exc)
+
     while start < max_results:
         count = min(batch_size, max_results - start)
 
@@ -710,7 +829,13 @@ async def search_people(
         try:
             raw = await page.evaluate(
                 SEARCH_JS,
-                {"keywords": keywords, "start": start, "count": count, "filtersList": filters_list},
+                {
+                    "keywords": keywords,
+                    "start": start,
+                    "count": count,
+                    "filtersList": filters_list,
+                    "dynamicQueryId": dynamic_query_id or "",
+                },
             )
         except Exception as exc:
             error_msg = f"Browser error: {exc}"
@@ -724,14 +849,19 @@ async def search_people(
 
         if "error" in raw:
             error_msg = raw["error"]
-            debug_url = raw.get("debugUrl", "")
-            debug_body = raw.get("debugBody", "")
+            debug_info = raw.get("debugInfo", "")
             logger.error("Search failed at start=%d: %s", start, error_msg)
-            if debug_url:
-                logger.error("Request URL: %s", debug_url)
-            if debug_body:
-                logger.error("Response body: %s", debug_body)
+            if debug_info:
+                logger.error("Debug: %s", debug_info)
             break
+
+        # Log which endpoint/hash worked
+        used_qid = raw.get("_usedQueryId", "")
+        used_endpoint = raw.get("_usedEndpoint", "")
+        if used_qid:
+            logger.info("Search succeeded with queryId: %s", used_qid)
+        elif used_endpoint:
+            logger.info("Search succeeded with %s endpoint", used_endpoint)
 
         leads = _parse_search_results(raw)
         if not leads:
