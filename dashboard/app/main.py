@@ -1,5 +1,6 @@
 """LinkedPilot v2 — FastAPI application entry point."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,6 +12,13 @@ from app.config import TEMPLATES_DIR, STATIC_DIR, EXPORTS_DIR
 from app.database import get_lp_db, close_databases
 from app.services.openoutreach_reader import ensure_mock_crm_db
 from app.automation.browser import browser_manager
+
+# Configure logging so app logs (logger.info, logger.error, etc.) show in CMD
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 
 @asynccontextmanager

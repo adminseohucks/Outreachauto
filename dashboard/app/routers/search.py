@@ -108,6 +108,8 @@ async def run_search(
     global _last_search_results
     from app.automation.linkedin_search import search_people
 
+    print(f"\n  [Search] Received search request: keywords='{keywords}' sender={sender_id} max={max_results}")
+
     senders, lists = await _get_senders_and_lists()
     extra = {
         "search_query": keywords,

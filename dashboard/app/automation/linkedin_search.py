@@ -502,84 +502,35 @@ _cached_query_id: str | None = None
 
 
 async def capture_query_id_via_navigation(page: Page) -> str | None:
-    """Capture the LIVE queryId by navigating to LinkedIn search and
-    intercepting the actual API request LinkedIn makes.
+    """Try to extract the current queryId from LinkedIn's JS bundles.
 
-    This is the most reliable method because it captures whatever
-    queryId LinkedIn is currently using, regardless of rotation.
+    IMPORTANT: Does NOT navigate the page — navigating causes timeouts
+    and leaves the page in a broken state, hanging all subsequent calls.
+    Instead, tries JS extraction on the current page only.
+    The hardcoded hashes in SEARCH_JS are the primary fallback.
 
-    Returns the full queryId string (e.g. 'voyagerSearchDashClusters.abc123...')
-    or None if capture fails.
+    Returns the full queryId string or None.
     """
     global _cached_query_id
     if _cached_query_id:
         logger.info("Using cached queryId: %s", _cached_query_id)
+        print(f"  [Search] Using cached queryId: {_cached_query_id[:40]}...")
         return _cached_query_id
 
-    captured = {"qid": None}
-
-    async def intercept_search_api(route):
-        """Route handler that captures queryId from search API calls."""
-        url = route.request.url
-        if "queryId=" in url and "voyagerSearchDash" in url:
-            try:
-                qid = url.split("queryId=")[1].split("&")[0]
-                captured["qid"] = qid
-                logger.info("Intercepted live queryId: %s", qid)
-            except Exception:
-                pass
-        # Always continue the request (don't block it)
-        await route.continue_()
-
+    # Only try JS extraction on current page — NO navigation
     try:
-        # Set up route interception for GraphQL search requests
-        await page.route("**/voyager/api/graphql*", intercept_search_api)
-
-        # Save current URL to restore later
-        original_url = page.url
-
-        # Navigate to a simple people search - LinkedIn will make the API call
-        search_url = (
-            "https://www.linkedin.com/search/results/people/"
-            "?keywords=CEO&origin=GLOBAL_SEARCH_HEADER"
-        )
-        logger.info("Navigating to LinkedIn search to capture queryId...")
-        # Use domcontentloaded instead of networkidle — LinkedIn's tracking
-        # scripts fire endlessly, so networkidle ALWAYS times out (30s wasted).
-        # The GraphQL search API call fires early during page load.
-        await page.goto(search_url, timeout=15000, wait_until="domcontentloaded")
-
-        # Wait briefly for the GraphQL search API call to fire
-        # (it happens right after DOM is loaded, not after all trackers finish)
-        for _ in range(10):
-            if captured["qid"]:
-                break
-            await page.wait_for_timeout(500)
-
-        # Remove the route handler
-        await page.unroute("**/voyager/api/graphql*", intercept_search_api)
-
-        # Navigate back to avoid interfering with user's page
-        if original_url and "linkedin.com" in original_url:
-            await page.goto(original_url, timeout=15000, wait_until="domcontentloaded")
-        else:
-            await page.goto("https://www.linkedin.com/feed/", timeout=15000, wait_until="domcontentloaded")
-
-        if captured["qid"]:
-            _cached_query_id = captured["qid"]
-            logger.info("Captured and cached queryId: %s", _cached_query_id)
-            return _cached_query_id
-        else:
-            logger.warning("Navigation completed but no queryId was intercepted")
-            return None
-
+        qid = await page.evaluate(EXTRACT_QUERY_ID_JS)
+        if qid:
+            _cached_query_id = qid
+            logger.info("Extracted queryId from JS: %s", qid)
+            print(f"  [Search] Extracted fresh queryId from JS: {qid[:40]}...")
+            return qid
+        logger.info("JS extraction returned nothing, will use hardcoded hashes")
+        print("  [Search] Could not extract queryId, using known hashes (this is OK)")
+        return None
     except Exception as exc:
-        logger.error("queryId capture via navigation failed: %s", exc)
-        # Clean up route handler on error
-        try:
-            await page.unroute("**/voyager/api/graphql*", intercept_search_api)
-        except Exception:
-            pass
+        logger.warning("JS queryId extraction failed: %s", exc)
+        print(f"  [Search] JS queryId extraction failed (OK, using known hashes): {exc}")
         return None
 
 
@@ -876,24 +827,29 @@ async def search_people(
     start = 0
     error_msg = None
 
+    print(f"\n  [Search] Starting search: keywords='{keywords}' max_results={max_results}")
+
     # Make sure we're on LinkedIn first
     current_url = page.url
     if "linkedin.com" not in current_url:
         try:
+            print("  [Search] Navigating to LinkedIn...")
             await page.goto("https://www.linkedin.com/feed/", timeout=15000, wait_until="domcontentloaded")
             await page.wait_for_timeout(2000)
         except Exception as exc:
+            print(f"  [Search] ERROR: Could not navigate to LinkedIn: {exc}")
             return [], f"Could not navigate to LinkedIn: {exc}"
 
     # Use pre-resolved geoUrn from autocomplete, or resolve from text
     if not geo_urn and location:
+        print(f"  [Search] Resolving location: '{location}'...")
         geo_urn_resolved = await _resolve_geo_urn(page, location)
         if geo_urn_resolved:
             geo_urn = geo_urn_resolved
         else:
             # Fallback: append location to keywords
             keywords = f"{keywords} {location}"
-            logger.info("Geo lookup failed, appending location to keywords: '%s'", keywords)
+            print(f"  [Search] Geo lookup failed, appended to keywords: '{keywords}'")
 
     # Build filters string in LinkedIn format
     filters_list = _build_filters_list(
@@ -902,29 +858,21 @@ async def search_people(
         company_size=company_size,
     )
 
-    # Strategy 1 (BEST): Capture queryId via network interception
+    # Try to extract queryId from LinkedIn JS (no navigation, instant)
     dynamic_query_id = None
     try:
         dynamic_query_id = await capture_query_id_via_navigation(page)
-        if dynamic_query_id:
-            logger.info("Got queryId via network capture: %s", dynamic_query_id)
     except Exception as exc:
-        logger.warning("Network capture failed: %s", exc)
-
-    # Strategy 2 (FALLBACK): Try JS bundle extraction
+        logger.warning("queryId extraction failed: %s", exc)
+    # No dynamic queryId is OK — SEARCH_JS has hardcoded hashes as fallback
     if not dynamic_query_id:
-        try:
-            dynamic_query_id = await page.evaluate(EXTRACT_QUERY_ID_JS)
-            if dynamic_query_id:
-                logger.info("Dynamically extracted queryId from JS: %s", dynamic_query_id)
-            else:
-                logger.info("Could not extract dynamic queryId, will try known hashes")
-        except Exception as exc:
-            logger.warning("JS queryId extraction failed: %s", exc)
+        print("  [Search] Using hardcoded queryId hashes (this is normal)")
 
     while start < max_results:
         count = min(batch_size, max_results - start)
+        batch_num = (start // batch_size) + 1
 
+        print(f"  [Search] Fetching batch {batch_num} (results {start+1}-{start+count})...")
         logger.info(
             "Searching LinkedIn: keywords='%s' start=%d count=%d filters=%s",
             keywords, start, count, filters_list,
@@ -943,19 +891,23 @@ async def search_people(
             )
         except Exception as exc:
             error_msg = f"Browser error: {exc}"
+            print(f"  [Search] ERROR in batch {batch_num}: {exc}")
             logger.error("page.evaluate failed: %s", exc)
             break
 
         if not raw:
             error_msg = "No response from LinkedIn API"
+            print(f"  [Search] ERROR: No response from LinkedIn API")
             logger.error(error_msg)
             break
 
         if "error" in raw:
             error_msg = raw["error"]
             debug_info = raw.get("debugInfo", "")
+            print(f"  [Search] ERROR: {error_msg}")
             logger.error("Search failed at start=%d: %s", start, error_msg)
             if debug_info:
+                print(f"  [Search] Debug: {debug_info}")
                 logger.error("Debug: %s", debug_info)
             break
 
@@ -969,16 +921,19 @@ async def search_people(
 
         leads = _parse_search_results(raw)
         if not leads:
+            print(f"  [Search] No more results after batch {batch_num}")
             logger.info("No more results at start=%d", start)
             break
 
         all_leads.extend(leads)
+        print(f"  [Search] Batch {batch_num}: got {len(leads)} leads (total: {len(all_leads)})")
         logger.info("Got %d leads (total so far: %d)", len(leads), len(all_leads))
 
         start += batch_size
 
         # Small delay between pages to avoid rate limiting
-        await page.wait_for_timeout(1500)
+        if start < max_results:
+            await page.wait_for_timeout(1500)
 
     # Deduplicate by profile_url
     seen = set()
@@ -988,6 +943,7 @@ async def search_people(
             seen.add(lead["profile_url"])
             unique.append(lead)
 
+    print(f"  [Search] DONE: {len(unique)} unique leads for '{keywords}'\n")
     logger.info("Search complete: %d unique leads for '%s'", len(unique), keywords)
     return unique, error_msg
 
