@@ -22,29 +22,46 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Candidate selectors for the "Recent Activity" / posts section
+# LinkedIn changes DOM frequently — newest selectors first.
 ACTIVITY_SECTION_SELECTORS = [
+    "div.feed-shared-update-v2",
+    'div[data-urn*="activity"]',
+    'div[data-urn*="ugcPost"]',
+    "div.scaffold-finite-scroll__content",
     "section.pv-recent-activity-section-v2",
     "div.pv-recent-activity-section-v2",
     'section[data-section="recent-activity"]',
     "#content_collections",
-    "div.feed-shared-update-v2",
     'main[aria-label="Recent activity"]',
+    "main",
 ]
 
 # Candidate selectors for individual post containers
 POST_CONTAINER_SELECTORS = [
     "div.feed-shared-update-v2",
+    'div[data-urn*="activity"]',
+    'div[data-urn*="ugcPost"]',
     "div.occludable-update",
     'li.profile-creator-shared-feed-update__container',
-    'div[data-urn*="activity"]',
+    # Generic fallback: any div with a like-related button
+    'div:has(button[aria-label*="ike"])',
 ]
 
 # Candidate selectors for the Like button inside a post
+# Note: LinkedIn uses "Like" and also localized variants; aria-label is most reliable.
 LIKE_BUTTON_SELECTORS = [
-    'button[aria-label*="Like"]',
+    # 2025-2026 LinkedIn DOM — reaction buttons use aria-label="Like" or "React Like"
+    'button[aria-label*="Like"]:not([aria-label*="Unlike"])',
+    'button[aria-label="Like"]',
     'button.react-button__trigger[aria-label*="Like"]',
+    'button.reactions-react-button',
     'button span.reactions-react-button',
-    'button[aria-pressed] svg[data-test-icon="thumbs-up-outline-medium"]',
+    # Fallback: find by thumbs-up icon
+    'button:has(svg[data-test-icon="thumbs-up-outline-medium"])',
+    'button:has(svg.reactions-icon--thumbs-up)',
+    # Generic: any button with aria-pressed in social actions bar
+    '.social-actions-bar button[aria-pressed="false"]',
+    '.feed-shared-social-action-bar button[aria-pressed="false"]',
 ]
 
 
@@ -156,6 +173,39 @@ async def like_latest_post(
                 break
         except Exception:
             continue
+
+    # Fallback: use JavaScript to locate like button by text/aria
+    if like_button is None:
+        try:
+            like_button = await page.evaluate_handle("""
+                () => {
+                    // Strategy 1: find button with aria-label containing "Like" but not "Unlike"
+                    const buttons = document.querySelectorAll('button[aria-label]');
+                    for (const btn of buttons) {
+                        const label = btn.getAttribute('aria-label') || '';
+                        if (label.includes('Like') && !label.includes('Unlike') && btn.offsetParent !== null) {
+                            return btn;
+                        }
+                    }
+                    // Strategy 2: find by visible text "Like" inside social actions
+                    const allBtns = document.querySelectorAll('button');
+                    for (const btn of allBtns) {
+                        const text = btn.textContent.trim();
+                        if (text === 'Like' && btn.offsetParent !== null) {
+                            return btn;
+                        }
+                    }
+                    return null;
+                }
+            """)
+            if like_button:
+                is_null = await page.evaluate("(el) => el === null", like_button)
+                if is_null:
+                    like_button = None
+                else:
+                    logger.info("Like button found via JavaScript fallback")
+        except Exception as exc:
+            logger.warning("JS like button fallback failed: %s", exc)
 
     if like_button is None:
         result["error"] = "Like button not found on latest post"

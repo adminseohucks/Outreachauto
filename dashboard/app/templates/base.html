@@ -4,12 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}LinkedPilot v2{% endblock %}</title>
-    <!-- Pico CSS - Lightweight, semantic CSS framework -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-    <!-- HTMX for dynamic updates -->
-    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-    <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+    <!-- Local CSS — no CDN dependency for faster load -->
+    <link rel="stylesheet" href="/static/css/pico-lite.css">
     <link rel="stylesheet" href="/static/css/custom.css">
+    <!-- Micro HTMX replacement — only features we use (delete, swap, confirm) -->
+    <script src="/static/js/htmx-micro.js"></script>
 </head>
 <body>
     <nav class="container-fluid">
@@ -41,18 +40,7 @@
     </footer>
 
     <script src="/static/js/app.js"></script>
-    <script>
-    // Defer SSE connection until page is fully rendered
-    window.addEventListener("load", function() {
-        var el = document.getElementById("sse-container");
-        if (el) {
-            el.setAttribute("hx-ext", "sse");
-            el.setAttribute("sse-connect", "/api/activity-stream");
-            el.setAttribute("sse-swap", "activity");
-            htmx.process(el);
-        }
-    });
-    </script>
+    <!-- SSE handled natively by app.js — no HTMX SSE extension needed -->
     {% block scripts %}{% endblock %}
 </body>
 </html>

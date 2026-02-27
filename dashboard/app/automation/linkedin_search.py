@@ -515,10 +515,11 @@ _cached_query_id: str | None = None
 async def capture_query_id_via_navigation(page: Page) -> str | None:
     """Try to extract the current queryId from LinkedIn's JS bundles.
 
-    IMPORTANT: Does NOT navigate the page — navigating causes timeouts
-    and leaves the page in a broken state, hanging all subsequent calls.
-    Instead, tries JS extraction on the current page only.
-    The hardcoded hashes in SEARCH_JS are the primary fallback.
+    Strategies (in order):
+    1. Return cached queryId (if we have one from a previous call).
+    2. JS extraction from current page (no navigation).
+    3. Network interception: do a real search bar click on LinkedIn and
+       capture the GraphQL request queryId from the network traffic.
 
     Returns the full queryId string or None.
     """
@@ -528,7 +529,7 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
         print(f"  [Search] Using cached queryId: {_cached_query_id[:40]}...")
         return _cached_query_id
 
-    # Only try JS extraction on current page — NO navigation
+    # Strategy 1: JS extraction on current page — NO navigation
     try:
         qid = await page.evaluate(EXTRACT_QUERY_ID_JS)
         if qid:
@@ -536,13 +537,56 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
             logger.info("Extracted queryId from JS: %s", qid)
             print(f"  [Search] Extracted fresh queryId from JS: {qid[:40]}...")
             return qid
-        logger.info("JS extraction returned nothing, will use hardcoded hashes")
-        print("  [Search] Could not extract queryId, using known hashes (this is OK)")
-        return None
     except Exception as exc:
         logger.warning("JS queryId extraction failed: %s", exc)
-        print(f"  [Search] JS queryId extraction failed (OK, using known hashes): {exc}")
-        return None
+
+    # Strategy 2: Network interception — briefly listen for GraphQL requests
+    # while triggering a search via the LinkedIn search bar
+    try:
+        captured = {"qid": None}
+
+        async def _intercept(route):
+            url = route.request.url
+            if "voyagerSearchDashClusters" in url:
+                import re
+                match = re.search(r'queryId=(voyagerSearchDashClusters\.[a-f0-9]+)', url)
+                if match:
+                    captured["qid"] = match.group(1)
+            await route.continue_()
+
+        await page.route("**/voyager/api/graphql*", _intercept)
+
+        # Type a quick search to trigger LinkedIn's GraphQL call
+        search_input = await page.query_selector('input[aria-label="Search"]')
+        if not search_input:
+            search_input = await page.query_selector('input[placeholder*="Search"]')
+        if search_input:
+            await search_input.click()
+            await search_input.fill("test")
+            await page.keyboard.press("Enter")
+            # Wait briefly for the network request
+            await page.wait_for_timeout(4000)
+            # Clear the search
+            await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=10000)
+            await page.wait_for_timeout(1000)
+
+        await page.unroute("**/voyager/api/graphql*")
+
+        if captured["qid"]:
+            _cached_query_id = captured["qid"]
+            logger.info("Captured live queryId via network intercept: %s", captured["qid"])
+            print(f"  [Search] Captured live queryId: {captured['qid'][:40]}...")
+            return captured["qid"]
+    except Exception as exc:
+        logger.warning("Network interception for queryId failed: %s", exc)
+        try:
+            await page.unroute("**/voyager/api/graphql*")
+        except Exception:
+            pass
+
+    logger.info("All queryId extraction strategies failed, will use hardcoded hashes")
+    print("  [Search] Could not extract queryId, using known hashes (this is OK)")
+    return None
 
 
 def _build_filters_list(

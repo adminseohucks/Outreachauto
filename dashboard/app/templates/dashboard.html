@@ -6,7 +6,7 @@
     <h2>Dashboard</h2>
 
     <!-- Stat cards with HTMX live polling -->
-    <div id="live-stats" class="stat-grid" hx-get="/api/stats" hx-trigger="every 5s" hx-swap="none">
+    <div id="live-stats" class="stat-grid" hx-get="/api/stats" hx-trigger="every 30s" hx-swap="none">
         <div class="stat-card green">
             <span class="stat-value" id="stat-total">{{ stats.total if stats else lead_stats.total if lead_stats else 0 }}</span>
             <span class="stat-label">Total Leads</span>

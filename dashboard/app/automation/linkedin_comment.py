@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 
 POST_CONTAINER_SELECTORS = [
     "div.feed-shared-update-v2",
+    'div[data-urn*="activity"]',
+    'div[data-urn*="ugcPost"]',
     "div.occludable-update",
     "li.profile-creator-shared-feed-update__container",
-    'div[data-urn*="activity"]',
     'div[data-chameleon-result-urn*="activity"]',
     'div.scaffold-finite-scroll__content > div',
 ]
@@ -36,6 +37,9 @@ POST_TEXT_SELECTORS = [
     "div.feed-shared-inline-show-more-text",
     "span.break-words",
     'span[dir="ltr"]',
+    # 2025-2026: LinkedIn wraps text in nested spans
+    ".feed-shared-update-v2__description-wrapper span",
+    ".update-components-text span",
 ]
 
 COMMENT_BUTTON_SELECTORS = [
@@ -43,29 +47,38 @@ COMMENT_BUTTON_SELECTORS = [
     'button[aria-label*="comment"]',
     "button.comment-button",
     'button:has(span.comment-button__text)',
-    'button.social-actions-button:has-text("Comment")',
     'button:has(li-icon[type="comment-medium"])',
     'button:has(svg[data-test-icon="comment-medium"])',
+    # 2025-2026: social actions bar buttons
+    '.social-actions-bar button:nth-child(2)',
+    '.feed-shared-social-action-bar button:nth-child(2)',
 ]
 
 COMMENT_INPUT_SELECTORS = [
-    'div.ql-editor[data-placeholder="Add a comment…"]',
+    'div.ql-editor[data-placeholder="Add a comment\u2026"]',
     'div.ql-editor[data-placeholder*="comment"]',
+    'div.ql-editor[data-placeholder*="Comment"]',
     "div.ql-editor",
     'div[role="textbox"][aria-label*="comment"]',
     'div[role="textbox"][aria-label*="Comment"]',
     'div[role="textbox"][contenteditable="true"]',
     "div.comments-comment-box__form div[contenteditable]",
     'div.comments-comment-texteditor div[contenteditable="true"]',
+    # 2025-2026: new Prosemirror editor
+    'div.ProseMirror[contenteditable="true"]',
+    'div[data-artdeco-is-focused] div[contenteditable="true"]',
 ]
 
 SUBMIT_COMMENT_SELECTORS = [
     'button.comments-comment-box__submit-button',
     'button[aria-label="Post comment"]',
+    'button[aria-label="Post"]',
     'button[type="submit"].comments-comment-box__submit-button',
     'form.comments-comment-box__form button[type="submit"]',
     'button.comments-comment-box__submit-button--cr',
-    'div.comments-comment-box button:has-text("Post")',
+    # 2025-2026: generic submit near comment box
+    '.comments-comment-box button[type="submit"]',
+    'button.artdeco-button--primary[type="submit"]',
 ]
 
 # Selectors for existing comment items in the comment section
@@ -346,6 +359,31 @@ async def comment_on_latest_post(
             except Exception:
                 continue
 
+    # JS fallback for comment button
+    if comment_button is None:
+        try:
+            comment_button = await page.evaluate_handle("""
+                () => {
+                    const buttons = document.querySelectorAll('button');
+                    for (const btn of buttons) {
+                        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                        const text = btn.textContent.trim().toLowerCase();
+                        if ((label.includes('comment') || text === 'comment') && btn.offsetParent !== null) {
+                            return btn;
+                        }
+                    }
+                    return null;
+                }
+            """)
+            if comment_button:
+                is_null = await page.evaluate("(el) => el === null", comment_button)
+                if is_null:
+                    comment_button = None
+                else:
+                    logger.info("Comment button found via JavaScript fallback")
+        except Exception as exc:
+            logger.warning("JS comment button fallback failed: %s", exc)
+
     if comment_button is None:
         result["error"] = "Comment button not found on latest post"
         logger.error(result["error"])
@@ -386,6 +424,36 @@ async def comment_on_latest_post(
         except Exception:
             continue
 
+    # JS fallback for comment input
+    if comment_input_selector is None:
+        try:
+            found = await page.evaluate("""
+                () => {
+                    // Find any visible contenteditable in comment area
+                    const editors = document.querySelectorAll('[contenteditable="true"]');
+                    for (const ed of editors) {
+                        if (ed.offsetParent !== null && ed.closest('.comments-comment-box, .comments-comment-texteditor, [class*="comment"]')) {
+                            ed.setAttribute('data-lp-comment-input', '1');
+                            return true;
+                        }
+                    }
+                    // Broader fallback: any visible ql-editor or ProseMirror
+                    const generic = document.querySelectorAll('.ql-editor, .ProseMirror, [role="textbox"][contenteditable]');
+                    for (const ed of generic) {
+                        if (ed.offsetParent !== null) {
+                            ed.setAttribute('data-lp-comment-input', '1');
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if found:
+                comment_input_selector = '[data-lp-comment-input="1"]'
+                logger.info("Comment input found via JavaScript fallback")
+        except Exception as exc:
+            logger.warning("JS comment input fallback failed: %s", exc)
+
     if comment_input_selector is None:
         result["error"] = "Comment input box not found"
         logger.error(result["error"])
@@ -411,6 +479,33 @@ async def comment_on_latest_post(
                 break
         except Exception:
             continue
+
+    # JS fallback for submit button
+    if submit_button is None:
+        try:
+            submit_button = await page.evaluate_handle("""
+                () => {
+                    const buttons = document.querySelectorAll('button');
+                    for (const btn of buttons) {
+                        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                        const text = btn.textContent.trim().toLowerCase();
+                        const type = btn.getAttribute('type') || '';
+                        if ((label.includes('post') || text === 'post' || (type === 'submit' && btn.closest('[class*="comment"]')))
+                            && btn.offsetParent !== null && !btn.disabled) {
+                            return btn;
+                        }
+                    }
+                    return null;
+                }
+            """)
+            if submit_button:
+                is_null = await page.evaluate("(el) => el === null", submit_button)
+                if is_null:
+                    submit_button = None
+                else:
+                    logger.info("Submit button found via JavaScript fallback")
+        except Exception as exc:
+            logger.warning("JS submit button fallback failed: %s", exc)
 
     if submit_button is None:
         result["error"] = "Submit/Post button not found for comment"

@@ -123,59 +123,37 @@ async def activity_stream_sse(request: Request, last_id: int = 0):
 @router.get("/api/stats")
 async def api_stats(request: Request):
     """
-    Return JSON with current stats for HTMX polling.
+    Return JSON with current stats for dashboard polling.
 
-    Returns likes_today, comments_today, active_campaigns, active_senders,
-    and total_actions_pending.
+    Optimized: 2 queries instead of 5 for faster response.
     """
     db = await get_lp_db()
     today = date.today().isoformat()
 
-    # Today's likes across all senders
+    # Query 1: all today's counters grouped by action_type
     cursor = await db.execute(
-        "SELECT COALESCE(SUM(count), 0) AS total "
-        "FROM daily_counters WHERE date = ? AND action_type = 'like'",
+        "SELECT action_type, COALESCE(SUM(count), 0) AS total "
+        "FROM daily_counters WHERE date = ? GROUP BY action_type",
         (today,),
     )
-    row = await cursor.fetchone()
-    likes_today = row["total"] if row else 0
+    totals = {row["action_type"]: row["total"] for row in await cursor.fetchall()}
 
-    # Today's comments across all senders
-    cursor = await db.execute(
-        "SELECT COALESCE(SUM(count), 0) AS total "
-        "FROM daily_counters WHERE date = ? AND action_type = 'comment'",
-        (today,),
-    )
+    # Query 2: active campaigns + active senders + pending actions (single compound query)
+    cursor = await db.execute("""
+        SELECT
+            (SELECT COUNT(*) FROM campaigns WHERE status = 'active') AS active_campaigns,
+            (SELECT COUNT(*) FROM senders WHERE status = 'active') AS active_senders,
+            (SELECT COUNT(*) FROM action_queue WHERE status IN ('pending', 'scheduled')) AS pending_actions
+    """)
     row = await cursor.fetchone()
-    comments_today = row["total"] if row else 0
-
-    # Active campaigns
-    cursor = await db.execute(
-        "SELECT COUNT(*) AS cnt FROM campaigns WHERE status = 'active'"
-    )
-    row = await cursor.fetchone()
-    active_campaigns = row["cnt"] if row else 0
-
-    # Active senders
-    cursor = await db.execute(
-        "SELECT COUNT(*) AS cnt FROM senders WHERE status = 'active'"
-    )
-    row = await cursor.fetchone()
-    active_senders = row["cnt"] if row else 0
-
-    # Pending actions in queue
-    cursor = await db.execute(
-        "SELECT COUNT(*) AS cnt FROM action_queue WHERE status IN ('pending', 'scheduled')"
-    )
-    row = await cursor.fetchone()
-    total_actions_pending = row["cnt"] if row else 0
 
     return JSONResponse({
-        "likes_today": likes_today,
-        "comments_today": comments_today,
-        "active_campaigns": active_campaigns,
-        "active_senders": active_senders,
-        "total_actions_pending": total_actions_pending,
+        "likes_today": totals.get("like", 0),
+        "comments_today": totals.get("comment", 0),
+        "connects_today": totals.get("connect", 0),
+        "active_campaigns": row["active_campaigns"] if row else 0,
+        "active_senders": row["active_senders"] if row else 0,
+        "total_actions_pending": row["pending_actions"] if row else 0,
         "timestamp": datetime.now().strftime("%H:%M:%S"),
     })
 

@@ -1,0 +1,126 @@
+/*
+ * pico-lite.css — Minimal CSS framework replacing PicoCSS CDN.
+ * Covers: reset, typography, forms, tables, buttons, nav, containers.
+ * ~200 lines instead of 80KB PicoCSS = instant render.
+ */
+
+/* --- CSS Variables (Pico-compatible names so custom.css still works) --- */
+:root {
+  --pico-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+  --pico-font-size: 16px;
+  --pico-line-height: 1.5;
+  --pico-color: #1a1a2e;
+  --pico-background-color: #fff;
+  --pico-card-background-color: #fff;
+  --pico-muted-color: #6b7280;
+  --pico-muted-border-color: #e5e7eb;
+  --pico-primary: #3b82f6;
+  --pico-primary-hover: #2563eb;
+  --pico-form-element-border-color: #d1d5db;
+  --pico-form-element-focus-color: #3b82f6;
+  --pico-border-radius: 6px;
+  --pico-spacing: 1rem;
+}
+
+/* --- Reset --- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-family: var(--pico-font-family); font-size: var(--pico-font-size); line-height: var(--pico-line-height); color: var(--pico-color); background: var(--pico-background-color); -webkit-text-size-adjust: 100%; }
+
+body { min-height: 100vh; }
+
+/* --- Typography --- */
+h1, h2, h3, h4, h5, h6 { margin-bottom: 0.5em; font-weight: 700; line-height: 1.2; }
+h1 { font-size: 2rem; } h2 { font-size: 1.5rem; } h3 { font-size: 1.25rem; }
+h4 { font-size: 1.1rem; } h5 { font-size: 1rem; } h6 { font-size: 0.875rem; }
+p { margin-bottom: 1em; }
+a { color: var(--pico-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+small { font-size: 0.85em; }
+strong, b { font-weight: 700; }
+hr { border: none; border-top: 1px solid var(--pico-muted-border-color); margin: 1.5rem 0; }
+
+/* --- Container --- */
+.container { max-width: 1200px; margin: 0 auto; padding: 0 var(--pico-spacing); }
+.container-fluid { width: 100%; padding: 0 var(--pico-spacing); }
+
+/* --- Nav --- */
+nav { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem var(--pico-spacing); border-bottom: 1px solid var(--pico-muted-border-color); background: var(--pico-card-background-color); position: sticky; top: 0; z-index: 50; }
+nav ul { list-style: none; display: flex; gap: 0.25rem; flex-wrap: wrap; margin: 0; padding: 0; }
+nav li { display: inline-flex; }
+nav a { padding: 0.35rem 0.7rem; border-radius: var(--pico-border-radius); font-size: 0.9rem; color: var(--pico-color); white-space: nowrap; }
+nav a:hover { background: #f3f4f6; text-decoration: none; }
+nav a.active { background: var(--pico-primary); color: #fff; font-weight: 600; }
+nav strong { font-size: 1.1rem; }
+
+/* --- Main content spacing --- */
+main { padding-top: 1.5rem; padding-bottom: 2rem; }
+
+/* --- Buttons --- */
+button, [role="button"], input[type="submit"], input[type="button"], .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  padding: 0.5rem 1rem; border: 1px solid var(--pico-primary); border-radius: var(--pico-border-radius);
+  background: var(--pico-primary); color: #fff; font-size: 0.9rem; font-weight: 500;
+  cursor: pointer; text-decoration: none; transition: background 0.15s, opacity 0.15s;
+  line-height: 1.4;
+}
+button:hover, [role="button"]:hover { background: var(--pico-primary-hover); border-color: var(--pico-primary-hover); }
+button[disabled] { opacity: 0.5; cursor: not-allowed; }
+button.secondary, .btn-secondary { background: #fff; color: var(--pico-color); border-color: var(--pico-muted-border-color); }
+button.secondary:hover, .btn-secondary:hover { background: #f9fafb; }
+button.contrast, .btn-danger { background: #ef4444; border-color: #ef4444; color: #fff; }
+button.contrast:hover, .btn-danger:hover { background: #dc2626; }
+button.outline { background: transparent; color: var(--pico-primary); }
+button.outline:hover { background: rgba(59,130,246,0.08); }
+a[role="button"] { display: inline-flex; }
+
+/* --- Forms --- */
+form { margin-bottom: 1rem; }
+label { display: block; margin-bottom: 0.25rem; font-size: 0.9rem; font-weight: 500; }
+input, select, textarea {
+  width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--pico-form-element-border-color);
+  border-radius: var(--pico-border-radius); font-size: 0.9rem; font-family: inherit;
+  background: #fff; color: var(--pico-color); margin-bottom: 0.75rem; transition: border-color 0.15s;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--pico-form-element-focus-color); box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
+input[type="checkbox"], input[type="radio"] { width: auto; margin-right: 0.4rem; margin-bottom: 0; }
+textarea { resize: vertical; min-height: 80px; }
+select { cursor: pointer; appearance: auto; }
+fieldset { border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); padding: 1rem; margin-bottom: 1rem; }
+legend { font-weight: 600; padding: 0 0.5rem; }
+
+/* --- Table --- */
+table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 0.9rem; }
+th, td { padding: 0.6rem 0.75rem; text-align: left; border-bottom: 1px solid var(--pico-muted-border-color); }
+th { font-weight: 600; font-size: 0.8rem; text-transform: uppercase; color: var(--pico-muted-color); background: #f9fafb; }
+tr:hover { background: #f9fafb; }
+
+/* --- Article / Card --- */
+article { background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); padding: 1.25rem; margin-bottom: 1rem; }
+article header { margin-bottom: 0.75rem; font-weight: 600; }
+
+/* --- Grid helpers --- */
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+
+/* --- Details/Summary --- */
+details { border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); padding: 0.75rem; margin-bottom: 0.75rem; }
+summary { cursor: pointer; font-weight: 600; }
+
+/* --- Loading spinner --- */
+[aria-busy="true"] { position: relative; pointer-events: none; opacity: 0.7; }
+[aria-busy="true"]::after {
+  content: ""; display: inline-block; width: 1em; height: 1em; margin-left: 0.5em;
+  border: 2px solid var(--pico-muted-border-color); border-top-color: var(--pico-primary);
+  border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Utility --- */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+/* --- Responsive --- */
+@media (max-width: 768px) {
+  nav { flex-direction: column; gap: 0.5rem; }
+  nav ul { flex-wrap: wrap; justify-content: center; }
+  .container { padding: 0 0.75rem; }
+}
