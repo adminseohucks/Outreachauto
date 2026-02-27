@@ -14,14 +14,14 @@
             <label>Search Keywords <small>(required)</small>
                 <input type="text" name="keywords" placeholder="e.g. Software Engineer, CEO Fintech, Product Manager" value="{{ search_query or '' }}" required>
             </label>
-            <label>Location <small>(optional — type to search)</small>
+            <label>Location <small>(optional — select country/city)</small>
                 <div style="position: relative;">
                     <input type="text" id="location-input" autocomplete="off"
-                           placeholder="Type city or country..." value="{{ search_location or '' }}"
-                           oninput="geoLookup(this.value)" onfocus="geoLookup(this.value)">
+                           placeholder="Type to filter locations..." value="{{ search_location or '' }}"
+                           oninput="filterLocations(this.value)" onfocus="filterLocations(this.value)">
                     <input type="hidden" name="location" id="location-text" value="{{ search_location or '' }}">
                     <input type="hidden" name="geo_urn" id="geo-urn-input" value="">
-                    <div id="geo-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:50; background:var(--pico-card-background-color); border:1px solid var(--pico-muted-border-color); border-radius:0 0 8px 8px; max-height:240px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+                    <div id="geo-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:50; background:var(--pico-card-background-color); border:1px solid var(--pico-muted-border-color); border-radius:0 0 8px 8px; max-height:280px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
                 </div>
             </label>
         </div>
@@ -145,7 +145,7 @@
             </ul>
             <p><strong>Filters:</strong></p>
             <ul>
-                <li><strong>Location</strong> — Type city/country name (e.g. "Mumbai", "India")</li>
+                <li><strong>Location</strong> — Select from dropdown (100+ countries and major cities pre-loaded)</li>
                 <li><strong>Network</strong> — 1st degree (connected), 2nd degree, 3rd+</li>
                 <li><strong>Company Size</strong> — Filter by employer company size</li>
             </ul>
@@ -187,41 +187,25 @@
 
 {% block scripts %}
 <script>
-// --- Location Autocomplete ---
-var geoTimer = null;
-var geoCache = {};
+// --- Pre-populated Location Data (from server) ---
+var ALL_LOCATIONS = {{ geo_locations | tojson }};
 
-function geoLookup(query) {
-    clearTimeout(geoTimer);
+// --- Location Filter/Autocomplete (instant, no API calls) ---
+function filterLocations(query) {
     var dropdown = document.getElementById('geo-dropdown');
-    if (!query || query.length < 2) {
-        dropdown.style.display = 'none';
-        return;
-    }
-    // Debounce 300ms
-    geoTimer = setTimeout(function() { _doGeoLookup(query); }, 300);
-}
 
-function _doGeoLookup(query) {
-    // Check cache
-    if (geoCache[query]) {
-        _renderGeoDropdown(geoCache[query]);
+    if (!query || query.length < 1) {
+        // Show all locations when focused with empty input
+        _renderGeoDropdown(ALL_LOCATIONS.slice(0, 20));
         return;
     }
 
-    // Get a sender_id from the sender dropdown
-    var senderSel = document.querySelector('select[name="sender_id"]');
-    var senderId = senderSel ? senderSel.value : '';
-
-    fetch('/search/geo-lookup?q=' + encodeURIComponent(query) + '&sender_id=' + senderId)
-    .then(function(r) { return r.json(); })
-    .then(function(results) {
-        geoCache[query] = results;
-        _renderGeoDropdown(results);
-    })
-    .catch(function() {
-        document.getElementById('geo-dropdown').style.display = 'none';
+    var q = query.toLowerCase();
+    var matches = ALL_LOCATIONS.filter(function(loc) {
+        return loc.name.toLowerCase().indexOf(q) !== -1;
     });
+
+    _renderGeoDropdown(matches.slice(0, 15));
 }
 
 function _renderGeoDropdown(results) {
@@ -229,7 +213,12 @@ function _renderGeoDropdown(results) {
     dropdown.innerHTML = '';
 
     if (!results || results.length === 0) {
-        dropdown.style.display = 'none';
+        // Show "no match" message
+        var msg = document.createElement('div');
+        msg.textContent = 'No matching location found';
+        msg.style.cssText = 'padding:0.6rem 0.8rem; font-size:0.85rem; color:var(--pico-muted-color); font-style:italic;';
+        dropdown.appendChild(msg);
+        dropdown.style.display = 'block';
         return;
     }
 
@@ -264,6 +253,16 @@ document.addEventListener('click', function(e) {
 document.getElementById('location-input').addEventListener('input', function() {
     document.getElementById('geo-urn-input').value = '';
     document.getElementById('location-text').value = this.value;
+});
+
+// Clear location button (optional: click the X or clear the field)
+document.getElementById('location-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        this.value = '';
+        document.getElementById('location-text').value = '';
+        document.getElementById('geo-urn-input').value = '';
+        document.getElementById('geo-dropdown').style.display = 'none';
+    }
 });
 
 // Show loading state when searching

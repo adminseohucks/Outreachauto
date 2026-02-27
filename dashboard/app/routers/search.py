@@ -25,6 +25,28 @@ logger = logging.getLogger(__name__)
 _last_search_results: list[dict] = []
 
 
+def _build_geo_locations() -> list[dict]:
+    """Build a sorted, deduplicated list of {name, geoUrn} from GEO_URN_MAP."""
+    seen_urns: dict[str, str] = {}  # geo_id -> best display name
+    # Prefer longer, more descriptive names (e.g. "United Kingdom" over "UK")
+    for name, geo_id in GEO_URN_MAP.items():
+        existing = seen_urns.get(geo_id, "")
+        if len(name) > len(existing):
+            seen_urns[geo_id] = name
+    locations = []
+    for geo_id, name in seen_urns.items():
+        locations.append({
+            "name": name.title(),
+            "geoUrn": f"urn:li:geo:{geo_id}",
+        })
+    locations.sort(key=lambda x: x["name"])
+    return locations
+
+
+# Pre-build once at import time
+_GEO_LOCATIONS = _build_geo_locations()
+
+
 def _build_template_context(request, senders, lists, **extra):
     """Build the base template context for search page."""
     ctx = {
@@ -38,6 +60,7 @@ def _build_template_context(request, senders, lists, **extra):
         "search_company_size": "",
         "total_results": 0,
         "active_page": "search",
+        "geo_locations": _GEO_LOCATIONS,
     }
     ctx.update(extra)
     return ctx
