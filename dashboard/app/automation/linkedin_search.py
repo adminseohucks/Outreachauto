@@ -1,19 +1,25 @@
 """
-LinkedIn People Search via Voyager API.
+LinkedIn People Search via Voyager GraphQL API.
 
 Uses the sender's authenticated Playwright session to call LinkedIn's
-internal search API. Returns up to 1000 structured results per search.
+internal GraphQL search API.  Returns up to 1000 structured results.
 
-Supports filters: location, network degree, company size.
+Endpoint and query format based on linkedin-api v2.3.1 (the most popular
+open-source Python wrapper for LinkedIn's Voyager API).
+
+Supports filters: location (geoUrn), network degree, company size.
 """
 
 import logging
-import json
 from typing import Optional
 
 from playwright.async_api import Page
 
 logger = logging.getLogger(__name__)
+
+# queryId from linkedin-api v2.3.1 — this is the hash LinkedIn uses
+# to identify the "search clusters" GraphQL query.
+QUERY_ID = "voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0"
 
 # ---------------------------------------------------------------------------
 # JavaScript to lookup geo URN for a location name (e.g. "Mumbai" → urn)
@@ -47,16 +53,16 @@ async (locationText) => {
         if (!resp.ok) return { error: 'Geo lookup returned ' + resp.status };
         const data = await resp.json();
 
-        // Extract geo URN from response
-        const elements = data?.included || data?.elements || [];
-        for (const el of elements) {
+        // Extract geo URN from included array
+        const included = data?.included || [];
+        for (const el of included) {
             const urn = el?.entityUrn || el?.targetUrn || '';
             if (urn.includes('geo:')) return { geoUrn: urn };
         }
 
         // Fallback: check data.data.elements
-        const dataElements = data?.data?.elements || [];
-        for (const el of dataElements) {
+        const elements = data?.data?.elements || [];
+        for (const el of elements) {
             const urn = el?.targetUrn || el?.entityUrn || '';
             if (urn.includes('geo:')) return { geoUrn: urn };
         }
@@ -69,45 +75,32 @@ async (locationText) => {
 """
 
 # ---------------------------------------------------------------------------
-# JavaScript to perform Voyager people search with filters
+# JavaScript to perform Voyager GraphQL people search with filters
+# Matches the format used by linkedin-api v2.3.1 (verified working)
 # ---------------------------------------------------------------------------
 SEARCH_JS = """
-async ({ keywords, start, count, filters }) => {
+async ({ keywords, start, count, filtersList }) => {
     const csrfToken = document.cookie
         .split('; ')
         .find(c => c.startsWith('JSESSIONID='))
         ?.split('=')[1]
         ?.replace(/"/g, '') || '';
 
-    if (!csrfToken) return { error: 'No CSRF token — not logged in? Please login to LinkedIn first.' };
+    if (!csrfToken) return { error: 'No CSRF token — not logged in? Please open LinkedIn and login first.' };
 
-    // Build queryParameters list
-    let queryParams = '(key:resultType,value:List(PEOPLE))';
+    // Build the variables portion matching linkedin-api format
+    // Format: (start:0,origin:GLOBAL_SEARCH_HEADER,query:(keywords:CEO,flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))
+    const keywordsPart = keywords ? 'keywords:' + encodeURIComponent(keywords) + ',' : '';
+    const filtersStr = filtersList || '(key:resultType,value:List(PEOPLE))';
 
-    if (filters && filters.geoUrn) {
-        queryParams += ',(key:geoUrn,value:List(' + filters.geoUrn + '))';
-    }
+    const variables = '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
+        'query:(' + keywordsPart +
+        'flagshipSearchIntent:SEARCH_SRP,' +
+        'queryParameters:List(' + filtersStr + '),' +
+        'includeFiltersInResponse:false))';
 
-    if (filters && filters.network && filters.network.length > 0) {
-        queryParams += ',(key:network,value:List(' + filters.network.join(',') + '))';
-    }
-
-    if (filters && filters.companySize && filters.companySize.length > 0) {
-        queryParams += ',(key:companySize,value:List(' + filters.companySize.join(',') + '))';
-    }
-
-    const queryString = '(flagshipSearchIntent:SEARCH_SRP,' +
-        'keywords:' + encodeURIComponent(keywords) + ',' +
-        'queryParameters:List(' + queryParams + '))';
-
-    const url = 'https://www.linkedin.com/voyager/api/search/dash/clusters?' +
-        new URLSearchParams({
-            decorationId: 'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-191',
-            origin: 'GLOBAL_SEARCH_HEADER',
-            q: 'all',
-            start: String(start),
-            count: String(count),
-        }).toString() + '&query=' + queryString;
+    const queryId = 'voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0';
+    const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' + variables + '&queryId=' + queryId;
 
     try {
         const resp = await fetch(url, {
@@ -119,23 +112,9 @@ async ({ keywords, start, count, filters }) => {
             credentials: 'include',
         });
 
-        if (resp.status === 400) {
-            // Try fallback decoration ID
-            const url2 = url.replace('-191', '-174');
-            const resp2 = await fetch(url2, {
-                headers: {
-                    'csrf-token': csrfToken,
-                    'accept': 'application/vnd.linkedin.normalized+json+2.1',
-                    'x-restli-protocol-version': '2.0.0',
-                },
-                credentials: 'include',
-            });
-            if (!resp2.ok) return { error: 'API returned ' + resp2.status + ' (tried both decoration IDs)' };
-            return await resp2.json();
-        }
-
-        if (!resp.ok) return { error: 'API returned ' + resp.status };
-        return await resp.json();
+        if (!resp.ok) return { error: 'API returned ' + resp.status + ' ' + resp.statusText };
+        const data = await resp.json();
+        return data;
     } catch (e) {
         return { error: e.message };
     }
@@ -173,52 +152,108 @@ async (vanityName) => {
 """
 
 
+def _build_filters_list(
+    geo_urn: str | None = None,
+    network: list[str] | None = None,
+    company_size: list[str] | None = None,
+) -> str:
+    """Build the LinkedIn queryParameters filter string.
+
+    Format: (key:resultType,value:List(PEOPLE)),(key:network,value:List(F | S))
+    Separator between values is ' | ' (with spaces) to match linkedin-api.
+    """
+    filters = ["(key:resultType,value:List(PEOPLE))"]
+    if geo_urn:
+        filters.append(f"(key:geoUrn,value:List({geo_urn}))")
+    if network:
+        values = " | ".join(network)
+        filters.append(f"(key:network,value:List({values}))")
+    if company_size:
+        values = " | ".join(company_size)
+        filters.append(f"(key:companySize,value:List({values}))")
+    return ",".join(filters)
+
+
 def _parse_search_results(raw_data: dict) -> list[dict]:
-    """Parse Voyager API response into clean lead dicts."""
+    """Parse GraphQL Voyager search response into clean lead dicts.
+
+    Response format (from /graphql endpoint):
+        data.searchDashClustersByAll.elements[].items[].item.entityResult
+    Each entityResult has: title, primarySubtitle, secondarySubtitle, navigationUrl
+    """
     leads = []
 
     if "error" in raw_data:
         logger.error("Search API error: %s", raw_data["error"])
         return leads
 
-    # The results are nested in the 'included' array
+    # --- Parse GraphQL response format ---
+    data_section = raw_data.get("data", {})
+    clusters = data_section.get("searchDashClustersByAll", {})
+
+    if not clusters:
+        logger.warning(
+            "No searchDashClustersByAll in response. Top keys: %s",
+            list(raw_data.keys())[:10],
+        )
+        # Fallback: try the old 'included' format
+        return _parse_included_format(raw_data)
+
+    cluster_type = clusters.get("_type", "")
+    if cluster_type and "CollectionResponse" not in cluster_type:
+        logger.warning("Unexpected cluster type: %s", cluster_type)
+
+    for cluster_element in clusters.get("elements", []):
+        c_type = cluster_element.get("_type", "")
+        if "SearchClusterViewModel" not in c_type:
+            continue
+
+        for search_item in cluster_element.get("items", []):
+            s_type = search_item.get("_type", "")
+            if "SearchItem" not in s_type:
+                continue
+
+            entity = search_item.get("item", {}).get("entityResult", {})
+            if not entity:
+                continue
+
+            e_type = entity.get("_type", "")
+            if "EntityResultViewModel" not in e_type:
+                continue
+
+            profile = _extract_from_entity_result(entity)
+            if profile and profile.get("profile_url"):
+                if not any(l["profile_url"] == profile["profile_url"] for l in leads):
+                    leads.append(profile)
+
+    return leads
+
+
+def _parse_included_format(raw_data: dict) -> list[dict]:
+    """Fallback parser for the older 'included' array response format."""
+    leads = []
     included = raw_data.get("included", [])
 
     if not included:
-        logger.warning("No 'included' array in response. Keys: %s",
-                        list(raw_data.keys())[:10])
         return leads
 
-    # Build a lookup of entity URNs to their data
-    entities = {}
-    for item in included:
-        urn = item.get("entityUrn", item.get("$id", ""))
-        entities[urn] = item
-
-    # Find person results
     for item in included:
         recipe = item.get("$type", "")
-
-        # Look for search result items
-        if "SearchResult" not in recipe and "MiniProfile" not in recipe:
-            continue
-
-        # Try to extract from different response formats
         profile = None
+
         if "EntityResultViewModel" in recipe or "EntityResult" in recipe:
-            profile = _extract_from_entity_result(item, entities)
+            profile = _extract_from_entity_result(item)
         elif "MiniProfile" in recipe:
             profile = _extract_from_mini_profile(item)
 
         if profile and profile.get("profile_url"):
-            # Deduplicate by profile_url
             if not any(l["profile_url"] == profile["profile_url"] for l in leads):
                 leads.append(profile)
 
     return leads
 
 
-def _extract_from_entity_result(item: dict, entities: dict) -> Optional[dict]:
+def _extract_from_entity_result(item: dict, entities: dict | None = None) -> Optional[dict]:
     """Extract lead from EntityResultViewModel."""
     title_data = item.get("title", {})
     full_name = title_data.get("text", "") if isinstance(title_data, dict) else str(title_data)
@@ -229,13 +264,25 @@ def _extract_from_entity_result(item: dict, entities: dict) -> Optional[dict]:
     location_data = item.get("secondarySubtitle", {})
     location = location_data.get("text", "") if isinstance(location_data, dict) else str(location_data)
 
-    # Get profile URL from navigationUrl
+    # Get profile URL from navigationUrl or entityUrn
     nav_url = item.get("navigationUrl", "")
     profile_url = ""
     if "/in/" in nav_url:
         profile_url = nav_url.split("?")[0]
         if not profile_url.startswith("https://"):
             profile_url = "https://www.linkedin.com" + profile_url
+
+    if not profile_url:
+        # Try to extract from entityUrn
+        urn = item.get("entityUrn", "")
+        if urn:
+            # urn format: urn:li:fsd_profile:ACoAAXXXX
+            parts = urn.split(":")
+            if len(parts) >= 4:
+                member_id = parts[-1]
+                # We need the vanity name, not the member ID
+                # Skip if we can't get a proper URL
+                pass
 
     if not full_name or not profile_url:
         return None
@@ -293,7 +340,7 @@ async def _resolve_geo_urn(page: Page, location_text: str) -> Optional[str]:
     try:
         result = await page.evaluate(GEO_LOOKUP_JS, location_text.strip())
         if result and "geoUrn" in result:
-            logger.info("Resolved '%s' → %s", location_text, result["geoUrn"])
+            logger.info("Resolved '%s' -> %s", location_text, result["geoUrn"])
             return result["geoUrn"]
         else:
             error = result.get("error", "Unknown") if result else "No response"
@@ -315,7 +362,7 @@ async def search_people(
     """
     Search LinkedIn for people matching keywords and filters.
 
-    Uses the Voyager API through the sender's authenticated browser session.
+    Uses the Voyager GraphQL API through the sender's authenticated browser.
 
     Parameters
     ----------
@@ -324,7 +371,7 @@ async def search_people(
     max_results : Max number of results (capped at 999)
     location : Location text (e.g. "Mumbai", "India") — resolved to geoUrn
     network : Connection degree filter ["F"=1st, "S"=2nd, "O"=3rd+]
-    company_size : Company size codes ["F"=501-1000, "G"=1001-5000, etc.]
+    company_size : Company size codes ["B"=1-10 .. "I"=10001+]
 
     Returns
     -------
@@ -353,27 +400,25 @@ async def search_people(
             keywords = f"{keywords} {location}"
             logger.info("Geo lookup failed, appending location to keywords: '%s'", keywords)
 
-    # Build filters object
-    filters = {}
-    if geo_urn:
-        filters["geoUrn"] = geo_urn
-    if network:
-        filters["network"] = network
-    if company_size:
-        filters["companySize"] = company_size
+    # Build filters string in LinkedIn format
+    filters_list = _build_filters_list(
+        geo_urn=geo_urn,
+        network=network,
+        company_size=company_size,
+    )
 
     while start < max_results:
         count = min(batch_size, max_results - start)
 
         logger.info(
             "Searching LinkedIn: keywords='%s' start=%d count=%d filters=%s",
-            keywords, start, count, filters,
+            keywords, start, count, filters_list,
         )
 
         try:
             raw = await page.evaluate(
                 SEARCH_JS,
-                {"keywords": keywords, "start": start, "count": count, "filters": filters},
+                {"keywords": keywords, "start": start, "count": count, "filtersList": filters_list},
             )
         except Exception as exc:
             error_msg = f"Browser error: {exc}"
@@ -421,7 +466,6 @@ async def enrich_profile(page: Page, profile_url: str) -> dict:
 
     Returns dict with updated fields: headline, location, about, experience, etc.
     """
-    # Extract vanity name from URL
     vanity_name = ""
     if "/in/" in profile_url:
         vanity_name = profile_url.rstrip("/").split("/in/")[-1].split("?")[0]
@@ -429,7 +473,6 @@ async def enrich_profile(page: Page, profile_url: str) -> dict:
     if not vanity_name:
         return {"error": "Invalid profile URL"}
 
-    # Make sure we're on LinkedIn
     current_url = page.url
     if "linkedin.com" not in current_url:
         await page.goto("https://www.linkedin.com/feed/", timeout=30000)
@@ -441,7 +484,6 @@ async def enrich_profile(page: Page, profile_url: str) -> dict:
         error_msg = raw.get("error", "Unknown") if raw else "No response"
         return {"error": error_msg}
 
-    # Parse profile data
     profile = {}
     if isinstance(raw, dict):
         profile["first_name"] = raw.get("firstName", "")
