@@ -107,13 +107,15 @@ async def extract_post_text(
     }
 
     # ------------------------------------------------------------------
-    # Navigate
+    # Navigate to the profile's activity page (posts are there, not on
+    # the main profile page which only shows a summary).
     # ------------------------------------------------------------------
+    activity_url = profile_url.rstrip("/") + "/recent-activity/all/"
     try:
-        await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(activity_url, wait_until="domcontentloaded", timeout=30000)
         await human_delay.random_delay(2, 4)
     except Exception as exc:
-        result["error"] = f"Failed to navigate to profile: {exc}"
+        result["error"] = f"Failed to navigate to activity page: {exc}"
         logger.error(result["error"])
         return result
 
@@ -125,7 +127,7 @@ async def extract_post_text(
         logger.error(result["error"])
         return result
 
-    # Scroll to load activity section
+    # Scroll to load posts
     try:
         await human_delay.human_scroll(page)
         await human_delay.random_delay(1, 2)
@@ -220,13 +222,14 @@ async def comment_on_latest_post(
     }
 
     # ------------------------------------------------------------------
-    # 1. Navigate to profile
+    # 1. Navigate to profile's activity page (posts are listed here)
     # ------------------------------------------------------------------
+    activity_url = profile_url.rstrip("/") + "/recent-activity/all/"
     try:
-        await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(activity_url, wait_until="domcontentloaded", timeout=30000)
         await human_delay.random_delay(2, 4)
     except Exception as exc:
-        result["error"] = f"Failed to navigate to profile: {exc}"
+        result["error"] = f"Failed to navigate to activity page: {exc}"
         logger.error(result["error"])
         return result
 
@@ -240,7 +243,7 @@ async def comment_on_latest_post(
         logger.error(result["error"])
         return result
 
-    # Scroll to load activity
+    # Scroll to load posts
     try:
         await human_delay.human_scroll(page)
         await human_delay.random_delay(1, 2)

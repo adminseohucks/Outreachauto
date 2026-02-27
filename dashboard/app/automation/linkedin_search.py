@@ -310,7 +310,11 @@ async ({ keywords, start, count, filtersList }) => {
 
     // Build the variables portion matching linkedin-api format
     // Format: (start:0,origin:GLOBAL_SEARCH_HEADER,query:(keywords:CEO,flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))
-    const keywordsPart = keywords ? 'keywords:' + encodeURIComponent(keywords) + ',' : '';
+    // Note: Remove double-quotes from keywords — LinkedIn's parentheses-based
+    // variable syntax breaks with URL-encoded quotes (%22). LinkedIn search
+    // handles OR/AND operators without quotes around individual terms.
+    const cleanKeywords = keywords.replace(/"/g, '').replace(/\s+/g, ' ').trim();
+    const keywordsPart = cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '';
     const filtersStr = filtersList || '(key:resultType,value:List(PEOPLE))';
 
     const variables = '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
