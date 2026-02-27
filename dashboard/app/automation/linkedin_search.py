@@ -488,6 +488,88 @@ async (vanityName) => {
 """
 
 
+# ---------------------------------------------------------------------------
+# Module-level cache for captured queryId so we don't re-navigate every time.
+# Reset on import (server restart).
+# ---------------------------------------------------------------------------
+_cached_query_id: str | None = None
+
+
+async def capture_query_id_via_navigation(page: Page) -> str | None:
+    """Capture the LIVE queryId by navigating to LinkedIn search and
+    intercepting the actual API request LinkedIn makes.
+
+    This is the most reliable method because it captures whatever
+    queryId LinkedIn is currently using, regardless of rotation.
+
+    Returns the full queryId string (e.g. 'voyagerSearchDashClusters.abc123...')
+    or None if capture fails.
+    """
+    global _cached_query_id
+    if _cached_query_id:
+        logger.info("Using cached queryId: %s", _cached_query_id)
+        return _cached_query_id
+
+    captured = {"qid": None}
+
+    async def intercept_search_api(route):
+        """Route handler that captures queryId from search API calls."""
+        url = route.request.url
+        if "queryId=" in url and "voyagerSearchDash" in url:
+            try:
+                qid = url.split("queryId=")[1].split("&")[0]
+                captured["qid"] = qid
+                logger.info("Intercepted live queryId: %s", qid)
+            except Exception:
+                pass
+        # Always continue the request (don't block it)
+        await route.continue_()
+
+    try:
+        # Set up route interception for GraphQL search requests
+        await page.route("**/voyager/api/graphql*", intercept_search_api)
+
+        # Save current URL to restore later
+        original_url = page.url
+
+        # Navigate to a simple people search - LinkedIn will make the API call
+        search_url = (
+            "https://www.linkedin.com/search/results/people/"
+            "?keywords=CEO&origin=GLOBAL_SEARCH_HEADER"
+        )
+        logger.info("Navigating to LinkedIn search to capture queryId...")
+        await page.goto(search_url, timeout=30000, wait_until="networkidle")
+
+        # Give it a moment for any remaining API calls
+        await page.wait_for_timeout(3000)
+
+        # Remove the route handler
+        await page.unroute("**/voyager/api/graphql*", intercept_search_api)
+
+        # Navigate back to avoid interfering with user's page
+        if original_url and "linkedin.com" in original_url:
+            await page.goto(original_url, timeout=15000)
+        else:
+            await page.goto("https://www.linkedin.com/feed/", timeout=15000)
+
+        if captured["qid"]:
+            _cached_query_id = captured["qid"]
+            logger.info("Captured and cached queryId: %s", _cached_query_id)
+            return _cached_query_id
+        else:
+            logger.warning("Navigation completed but no queryId was intercepted")
+            return None
+
+    except Exception as exc:
+        logger.error("queryId capture via navigation failed: %s", exc)
+        # Clean up route handler on error
+        try:
+            await page.unroute("**/voyager/api/graphql*", intercept_search_api)
+        except Exception:
+            pass
+        return None
+
+
 def _build_filters_list(
     geo_urn: str | None = None,
     network: list[str] | None = None,
@@ -807,16 +889,25 @@ async def search_people(
         company_size=company_size,
     )
 
-    # Try to dynamically extract the current queryId from LinkedIn's JS bundles
+    # Strategy 1 (BEST): Capture queryId via network interception
     dynamic_query_id = None
     try:
-        dynamic_query_id = await page.evaluate(EXTRACT_QUERY_ID_JS)
+        dynamic_query_id = await capture_query_id_via_navigation(page)
         if dynamic_query_id:
-            logger.info("Dynamically extracted queryId: %s", dynamic_query_id)
-        else:
-            logger.info("Could not extract dynamic queryId, will try known hashes")
+            logger.info("Got queryId via network capture: %s", dynamic_query_id)
     except Exception as exc:
-        logger.warning("queryId extraction failed: %s", exc)
+        logger.warning("Network capture failed: %s", exc)
+
+    # Strategy 2 (FALLBACK): Try JS bundle extraction
+    if not dynamic_query_id:
+        try:
+            dynamic_query_id = await page.evaluate(EXTRACT_QUERY_ID_JS)
+            if dynamic_query_id:
+                logger.info("Dynamically extracted queryId from JS: %s", dynamic_query_id)
+            else:
+                logger.info("Could not extract dynamic queryId, will try known hashes")
+        except Exception as exc:
+            logger.warning("JS queryId extraction failed: %s", exc)
 
     while start < max_results:
         count = min(batch_size, max_results - start)

@@ -422,6 +422,172 @@ async def add_search_results_to_list(
     })
 
 
+@router.get("/search/debug")
+async def debug_search(request: Request, sender_id: int = 0):
+    """Diagnostic endpoint: test all search methods and report what works.
+
+    Visit: http://localhost:8080/search/debug?sender_id=1
+    Returns JSON with test results for each approach.
+    """
+    results = {"tests": [], "sender_id": sender_id}
+
+    if not sender_id:
+        # Find any open sender
+        db = await get_lp_db()
+        cursor = await db.execute(
+            "SELECT id, name FROM senders WHERE status IN ('active', 'paused') ORDER BY id"
+        )
+        for row in await cursor.fetchall():
+            if browser_manager.is_open(row["id"]):
+                sender_id = row["id"]
+                results["sender_id"] = sender_id
+                results["sender_name"] = row["name"]
+                break
+
+    if not sender_id or not browser_manager.is_open(sender_id):
+        results["error"] = "No sender has an open browser. Go to Senders page and click 'Open Chrome & Login' first."
+        return JSONResponse(results)
+
+    page = await browser_manager.get_page(sender_id)
+
+    # Test 1: Check CSRF token
+    csrf = await page.evaluate("""
+        () => {
+            const c = document.cookie.split('; ').find(c => c.startsWith('JSESSIONID='));
+            return c ? c.split('=')[1].replace(/"/g, '') : null;
+        }
+    """)
+    results["tests"].append({
+        "name": "CSRF Token",
+        "ok": bool(csrf),
+        "detail": csrf[:20] + "..." if csrf else "NOT FOUND - not logged in?"
+    })
+
+    if not csrf:
+        return JSONResponse(results)
+
+    # Test 2: Try network interception to capture live queryId
+    from app.automation.linkedin_search import capture_query_id_via_navigation
+    captured_qid = None
+    try:
+        captured_qid = await capture_query_id_via_navigation(page)
+        results["tests"].append({
+            "name": "Live queryId capture (navigation intercept)",
+            "ok": bool(captured_qid),
+            "detail": captured_qid or "Could not capture"
+        })
+    except Exception as e:
+        results["tests"].append({
+            "name": "Live queryId capture (navigation intercept)",
+            "ok": False,
+            "detail": f"Error: {e}"
+        })
+
+    # Test 3: Try GraphQL hashes with simple keyword "CEO"
+    hashes = [
+        'voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0',
+        'voyagerSearchDashClusters.994bf4e7d2173b92ccdb5935710c3c5d',
+        'voyagerSearchDashClusters.52fec77d08aa4598c8a056ca6bce6c11',
+    ]
+    if captured_qid:
+        hashes.insert(0, captured_qid)
+
+    for qid in hashes:
+        test_result = await page.evaluate("""
+            async ({qid}) => {
+                const csrfToken = document.cookie.split('; ')
+                    .find(c => c.startsWith('JSESSIONID='))?.split('=')[1]?.replace(/"/g, '') || '';
+                const variables = '(start:0,origin:GLOBAL_SEARCH_HEADER,query:(keywords:CEO,flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))';
+                const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' + variables + '&queryId=' + qid;
+                try {
+                    const resp = await fetch(url, {
+                        headers: {
+                            'csrf-token': csrfToken,
+                            'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                            'x-restli-protocol-version': '2.0.0',
+                        },
+                        credentials: 'include',
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        return { status: resp.status, ok: true, includedCount: (data.included || []).length };
+                    }
+                    let body = '';
+                    try { body = await resp.text(); } catch(e) {}
+                    return { status: resp.status, ok: false, body: body.substring(0, 200) };
+                } catch(e) {
+                    return { status: 0, ok: false, error: e.message };
+                }
+            }
+        """, {"qid": qid})
+        results["tests"].append({
+            "name": f"GraphQL hash: {qid.split('.')[-1][:12]}...",
+            "ok": test_result.get("ok", False),
+            "detail": f"status={test_result.get('status')} included={test_result.get('includedCount', 0)}" if test_result.get("ok") else f"status={test_result.get('status')} {test_result.get('body', test_result.get('error', ''))}"
+        })
+
+    # Test 4: REST endpoint
+    rest_result = await page.evaluate("""
+        async () => {
+            const csrfToken = document.cookie.split('; ')
+                .find(c => c.startsWith('JSESSIONID='))?.split('=')[1]?.replace(/"/g, '') || '';
+            const url = 'https://www.linkedin.com/voyager/api/search/dash/clusters?' +
+                'decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175' +
+                '&origin=GLOBAL_SEARCH_HEADER&q=all' +
+                '&query=(keywords:CEO,flagshipSearchIntent:SEARCH_SRP,' +
+                'queryParameters:List((key:resultType,value:List(PEOPLE))))' +
+                '&start=0&count=10';
+            try {
+                const resp = await fetch(url, {
+                    headers: {
+                        'csrf-token': csrfToken,
+                        'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                        'x-restli-protocol-version': '2.0.0',
+                    },
+                    credentials: 'include',
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    return { status: resp.status, ok: true, includedCount: (data.included || []).length };
+                }
+                let body = '';
+                try { body = await resp.text(); } catch(e) {}
+                return { status: resp.status, ok: false, body: body.substring(0, 200) };
+            } catch(e) {
+                return { status: 0, ok: false, error: e.message };
+            }
+        }
+    """)
+    results["tests"].append({
+        "name": "REST endpoint (non-GraphQL)",
+        "ok": rest_result.get("ok", False),
+        "detail": f"status={rest_result.get('status')} included={rest_result.get('includedCount', 0)}" if rest_result.get("ok") else f"status={rest_result.get('status')} {rest_result.get('body', rest_result.get('error', ''))}"
+    })
+
+    # Test 5: Try actual search_people function
+    try:
+        from app.automation.linkedin_search import search_people
+        leads, err = await search_people(page, "CEO", max_results=10)
+        results["tests"].append({
+            "name": "Full search_people('CEO', max=10)",
+            "ok": len(leads) > 0,
+            "detail": f"{len(leads)} leads found" + (f", error: {err}" if err else "")
+        })
+    except Exception as e:
+        results["tests"].append({
+            "name": "Full search_people('CEO', max=10)",
+            "ok": False,
+            "detail": f"Exception: {e}"
+        })
+
+    # Summary
+    passed = sum(1 for t in results["tests"] if t["ok"])
+    total = len(results["tests"])
+    results["summary"] = f"{passed}/{total} tests passed"
+
+    return JSONResponse(results, status_code=200)
+
+
 @router.post("/search/enrich")
 async def enrich_lead(
     request: Request,
