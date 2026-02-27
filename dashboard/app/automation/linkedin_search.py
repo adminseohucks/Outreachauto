@@ -326,6 +326,7 @@ async ({ keywords, start, count, filtersList }) => {
         const resp = await fetch(url, {
             headers: {
                 'csrf-token': csrfToken,
+                'accept': 'application/vnd.linkedin.normalized+json+2.1',
                 'x-restli-protocol-version': '2.0.0',
             },
             credentials: 'include',
