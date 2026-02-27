@@ -379,9 +379,22 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
 
     if (!csrfToken) return { error: 'No CSRF token — not logged in? Please open LinkedIn and login first.' };
 
+    // Helper: fetch with a 15-second timeout (browser fetch has NO default timeout)
+    async function fetchWithTimeout(url, options, timeoutMs = 15000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const resp = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timer);
+            return resp;
+        } catch (e) {
+            clearTimeout(timer);
+            throw e;
+        }
+    }
+
     // Clean keywords: normalize whitespace but PRESERVE quotes for boolean search
     // LinkedIn supports: "exact phrase", OR, AND, NOT, () operators
-    // Quotes are encoded as %22 by encodeURIComponent which LinkedIn handles fine
     const cleanKeywords = keywords.replace(/\\s+/g, ' ').trim();
     const keywordsPart = cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '';
     const filtersStr = filtersList || '(key:resultType,value:List(PEOPLE))';
@@ -414,11 +427,11 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
 
     let lastError = '';
 
-    // Try each queryId hash
+    // Try each queryId hash (with 15s timeout per request)
     for (const qid of queryIds) {
         const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' + variables + '&queryId=' + qid;
         try {
-            const resp = await fetch(url, { headers, credentials: 'include' });
+            const resp = await fetchWithTimeout(url, { headers, credentials: 'include' });
             if (resp.ok) {
                 const data = await resp.json();
                 data._usedQueryId = qid;
@@ -426,15 +439,13 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
             }
             let body = '';
             try { body = await resp.text(); } catch(e) {}
-            lastError = 'queryId ' + qid.split('.')[1].substring(0,8) + '... returned ' + resp.status +
-                '\\nRequest URL: ' + url.substring(0, 300) +
-                '\\nResponse body: ' + body.substring(0, 200);
+            lastError = 'queryId ' + qid.split('.')[1].substring(0,8) + '... returned ' + resp.status;
         } catch (e) {
-            lastError = e.message;
+            lastError = e.name === 'AbortError' ? 'Request timed out (15s)' : e.message;
         }
     }
 
-    // --- REST endpoint fallback (non-GraphQL, older but sometimes still works) ---
+    // --- REST endpoint fallback ---
     try {
         const restFilters = filtersStr;
         const restQuery = '(flagshipSearchIntent:SEARCH_SRP,' +
@@ -445,7 +456,7 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
             '&origin=GLOBAL_SEARCH_HEADER&q=all' +
             '&query=' + restQuery +
             '&start=' + start + '&count=' + count;
-        const resp = await fetch(restUrl, { headers, credentials: 'include' });
+        const resp = await fetchWithTimeout(restUrl, { headers, credentials: 'include' });
         if (resp.ok) {
             const data = await resp.json();
             data._usedEndpoint = 'REST';
@@ -453,7 +464,7 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
         }
         lastError += '; REST fallback returned ' + resp.status;
     } catch(e) {
-        lastError += '; REST fallback: ' + e.message;
+        lastError += '; REST: ' + (e.name === 'AbortError' ? 'timeout' : e.message);
     }
 
     return {
