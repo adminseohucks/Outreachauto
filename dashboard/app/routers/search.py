@@ -185,6 +185,30 @@ async def geo_lookup(request: Request, q: str = "", sender_id: str = ""):
             ?.replace(/"/g, '') || '';
         if (!csrfToken) return [];
 
+        // Helper: extract geo URN from any plausible field
+        function findGeoUrn(obj) {
+            if (!obj || typeof obj !== 'object') return '';
+            const candidates = [
+                obj.targetUrn, obj.entityUrn, obj.objectUrn, obj.trackingUrn,
+                obj.hitInfo?.id, obj.hitInfo?.entityUrn, obj.hitInfo?.targetUrn,
+            ];
+            for (const c of candidates) {
+                if (typeof c === 'string' && c.includes('geo:')) return c;
+            }
+            return '';
+        }
+
+        // Helper: extract display name from an element
+        function findName(el, urnToName) {
+            const name = el?.displayText?.text || el?.text?.text
+                || el?.title?.text || el?.defaultLocalizedName
+                || el?.hitInfo?.['com.linkedin.voyager.typeahead.TypeaheadGeo']?.defaultLocalizedName
+                || el?.name || '';
+            if (name) return name;
+            const urn = findGeoUrn(el);
+            return (urn && urnToName[urn]) || '';
+        }
+
         // Try multiple typeahead endpoints
         const urls = [
             'https://www.linkedin.com/voyager/api/typeahead/hitsV2?' +
@@ -207,7 +231,14 @@ async def geo_lookup(request: Request, q: str = "", sender_id: str = ""):
 
                 const results = [];
                 const included = data?.included || [];
-                const elements = data?.data?.elements || data?.elements || [];
+
+                // Gather elements from all possible locations
+                const allElements = [
+                    ...(data?.elements || []),
+                    ...(data?.data?.elements || []),
+                    ...((data?.data?.searchDashTypeaheadByGlobalTypeahead || {})?.elements || []),
+                    ...((data?.data?.typeaheadByGlobalTypeahead || {})?.elements || []),
+                ];
 
                 // Build URN→name map from included
                 const urnToName = {};
@@ -217,12 +248,13 @@ async def geo_lookup(request: Request, q: str = "", sender_id: str = ""):
                     if (urn && name) urnToName[urn] = name;
                 }
 
-                // Parse elements
-                for (const el of elements) {
-                    const urn = el?.targetUrn || el?.entityUrn || '';
-                    const displayText = el?.displayText?.text || el?.text?.text || '';
-                    const name = displayText || urnToName[urn] || '';
-                    if (urn && urn.includes('geo:') && name) {
+                // Parse all elements
+                const seen = new Set();
+                for (const el of allElements) {
+                    const urn = findGeoUrn(el);
+                    const name = findName(el, urnToName);
+                    if (urn && name && !seen.has(urn)) {
+                        seen.add(urn);
                         results.push({ name: name, geoUrn: urn });
                     }
                 }
@@ -230,9 +262,10 @@ async def geo_lookup(request: Request, q: str = "", sender_id: str = ""):
                 // Fallback: use included directly
                 if (results.length === 0) {
                     for (const el of included) {
-                        const urn = el?.entityUrn || el?.targetUrn || '';
+                        const urn = findGeoUrn(el);
                         const name = el?.defaultLocalizedName || el?.text?.text || '';
-                        if (urn && urn.includes('geo:') && name) {
+                        if (urn && name && !seen.has(urn)) {
+                            seen.add(urn);
                             results.push({ name: name, geoUrn: urn });
                         }
                     }
@@ -250,6 +283,10 @@ async def geo_lookup(request: Request, q: str = "", sender_id: str = ""):
     try:
         page = await browser_manager.get_page(sid)
         results = await page.evaluate(GEO_TYPEAHEAD_JS, q)
+        if not results:
+            logger.warning("Geo typeahead returned empty for query: '%s'", q)
+        else:
+            logger.info("Geo typeahead for '%s' returned %d results", q, len(results))
         return JSONResponse(results or [])
     except Exception as exc:
         logger.warning("Geo lookup error: %s", exc)

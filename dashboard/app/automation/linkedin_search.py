@@ -33,6 +33,19 @@ async (locationText) => {
         ?.replace(/"/g, '') || '';
     if (!csrfToken) return { error: 'No CSRF token — not logged in?' };
 
+    // Helper: extract geo URN from any plausible field
+    function findGeoUrn(obj) {
+        if (!obj || typeof obj !== 'object') return '';
+        const candidates = [
+            obj.targetUrn, obj.entityUrn, obj.objectUrn, obj.trackingUrn,
+            obj.hitInfo?.id, obj.hitInfo?.entityUrn, obj.hitInfo?.targetUrn,
+        ];
+        for (const c of candidates) {
+            if (typeof c === 'string' && c.includes('geo:')) return c;
+        }
+        return '';
+    }
+
     // Try multiple typeahead endpoints (LinkedIn changes these periodically)
     const urls = [
         'https://www.linkedin.com/voyager/api/typeahead/hitsV2?' +
@@ -40,6 +53,8 @@ async (locationText) => {
         'https://www.linkedin.com/voyager/api/graphql?variables=(query:' + encodeURIComponent(locationText) +
             ',type:GEO,count:10)&queryId=voyagerSearchDashTypeaheadByGlobalTypeahead.bcc3b0a84a2a75b7e5c67c0808245e61',
     ];
+
+    const debugInfo = [];
 
     for (const url of urls) {
         try {
@@ -50,28 +65,80 @@ async (locationText) => {
                 },
                 credentials: 'include',
             });
-            if (!resp.ok) continue;
+            if (!resp.ok) {
+                debugInfo.push({ url: url.substring(0, 80), status: resp.status });
+                continue;
+            }
             const data = await resp.json();
+            const topKeys = Object.keys(data || {});
 
-            // Check included array (normalized format)
+            // 1. Check included array (normalized format)
             const included = data?.included || [];
             for (const el of included) {
-                const urn = el?.entityUrn || el?.targetUrn || '';
-                if (urn.includes('geo:')) return { geoUrn: urn };
+                const urn = findGeoUrn(el);
+                if (urn) return { geoUrn: urn };
             }
 
-            // Check data.elements (denormalized format)
-            const elements = data?.data?.elements || data?.elements || [];
+            // 2. Check top-level elements
+            const elements = data?.elements || [];
             for (const el of elements) {
-                const urn = el?.targetUrn || el?.entityUrn || '';
-                if (urn.includes('geo:')) return { geoUrn: urn };
+                const urn = findGeoUrn(el);
+                if (urn) return { geoUrn: urn };
             }
+
+            // 3. Check data.elements (GraphQL wrapper)
+            const dataElements = data?.data?.elements || [];
+            for (const el of dataElements) {
+                const urn = findGeoUrn(el);
+                if (urn) return { geoUrn: urn };
+            }
+
+            // 4. Check nested GraphQL typeahead response
+            const typeahead = data?.data?.searchDashTypeaheadByGlobalTypeahead || data?.data?.typeaheadByGlobalTypeahead || {};
+            const taElements = typeahead?.elements || [];
+            for (const el of taElements) {
+                const urn = findGeoUrn(el);
+                if (urn) return { geoUrn: urn };
+            }
+
+            // 5. Deep scan: recursively search for any geo URN in the response
+            function deepFindGeo(obj, depth) {
+                if (depth > 4 || !obj) return '';
+                if (typeof obj === 'string') return obj.includes('urn:li:geo:') ? obj : '';
+                if (Array.isArray(obj)) {
+                    for (const item of obj) {
+                        const r = deepFindGeo(item, depth + 1);
+                        if (r) return r;
+                    }
+                } else if (typeof obj === 'object') {
+                    for (const val of Object.values(obj)) {
+                        const r = deepFindGeo(val, depth + 1);
+                        if (r) return r;
+                    }
+                }
+                return '';
+            }
+            const deepUrn = deepFindGeo(data, 0);
+            if (deepUrn) return { geoUrn: deepUrn };
+
+            // Collect debug info for this endpoint
+            const sampleEl = elements[0] || dataElements[0] || taElements[0] || included[0];
+            debugInfo.push({
+                url: url.substring(0, 80),
+                topKeys,
+                elementsCount: elements.length,
+                dataElementsCount: dataElements.length,
+                taElementsCount: taElements.length,
+                includedCount: included.length,
+                sampleKeys: sampleEl ? Object.keys(sampleEl) : [],
+            });
         } catch (e) {
+            debugInfo.push({ url: url.substring(0, 80), error: e.message });
             continue;
         }
     }
 
-    return { error: 'No geo URN found for: ' + locationText };
+    return { error: 'No geo URN found for: ' + locationText, debug: debugInfo };
 }
 """
 
@@ -392,7 +459,10 @@ async def _resolve_geo_urn(page: Page, location_text: str) -> Optional[str]:
             return result["geoUrn"]
         else:
             error = result.get("error", "Unknown") if result else "No response"
+            debug = result.get("debug", []) if result else []
             logger.warning("Geo lookup failed for '%s': %s", location_text, error)
+            if debug:
+                logger.warning("Geo lookup debug info: %s", debug)
             return None
     except Exception as exc:
         logger.warning("Geo lookup exception for '%s': %s", location_text, exc)
