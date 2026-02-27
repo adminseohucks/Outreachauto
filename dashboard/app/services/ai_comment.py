@@ -105,6 +105,75 @@ async def ask_ai_for_comment(
         }
 
 
+async def generate_ai_comment(
+    post_text: str,
+    existing_comments: List[str] | None = None,
+    tone: str = "professional",
+) -> dict:
+    """Ask VPS AI to generate an original comment based on post content.
+
+    Reads the post text and existing comments, then generates a short,
+    professional, appreciable comment in the same tone.
+
+    Args:
+        post_text: The LinkedIn post's text content.
+        existing_comments: Up to 5 existing comments for tone context.
+        tone: Desired tone (default: professional).
+
+    Returns:
+        {comment_text: str, confidence: float}
+
+    On failure, returns empty comment_text with confidence=0.
+    """
+    if not post_text:
+        return {"comment_text": "", "confidence": 0.0}
+
+    timestamp = str(int(time.time()))
+    payload = {
+        "post_text": post_text,
+        "existing_comments": (existing_comments or [])[:5],
+        "tone": tone,
+    }
+    body = json.dumps(payload, separators=(",", ":"))
+
+    signature = _sign_request(timestamp, body)
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": VPS_API_KEY,
+        "X-Request-Timestamp": timestamp,
+        "X-Signature": signature,
+    }
+
+    # Build the generate-comment URL from the base VPS_AI_URL
+    base_url = VPS_AI_URL.rsplit("/", 1)[0] if "/" in VPS_AI_URL else VPS_AI_URL
+    generate_url = f"{base_url}/generate-comment"
+
+    try:
+        async with httpx.AsyncClient(verify=VPS_SSL_VERIFY, timeout=30.0) as client:
+            response = await client.post(
+                generate_url,
+                content=body,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            comment = data.get("comment_text", "").strip()
+            confidence = float(data.get("confidence", 0.0))
+
+            if comment:
+                logger.info(
+                    "AI generated comment (confidence=%.2f): %.80s...",
+                    confidence, comment,
+                )
+            return {"comment_text": comment, "confidence": confidence}
+
+    except Exception as exc:
+        logger.warning("VPS AI generate-comment failed: %s", exc)
+        return {"comment_text": "", "confidence": 0.0}
+
+
 async def check_vps_health() -> dict:
     """
     Check VPS AI service health.

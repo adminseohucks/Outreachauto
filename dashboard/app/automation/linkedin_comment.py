@@ -80,7 +80,8 @@ COMMENT_COUNT_SELECTORS = [
 ]
 
 # Minimum number of existing comments required before we post
-MIN_EXISTING_COMMENTS = 5
+# Set to 0: comment even if no existing comments on the post
+MIN_EXISTING_COMMENTS = 0
 
 
 async def extract_post_text(

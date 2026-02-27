@@ -26,7 +26,7 @@ from app.services.rate_limiter import (
     check_cooldown,
     increment_counter,
 )
-from app.services.ai_comment import ask_ai_for_comment
+from app.services.ai_comment import ask_ai_for_comment, generate_ai_comment
 
 logger = logging.getLogger(__name__)
 
@@ -104,97 +104,67 @@ async def _execute_action(action: dict) -> bool:
         from app.automation.linkedin_comment import (
             comment_on_latest_post,
             extract_post_text,
-            MIN_EXISTING_COMMENTS,
         )
 
         comment_text = action.get("comment_text", "")
 
         if not comment_text:
-            # --- AI comment selection ---
-            # 1. Fetch all active predefined comments
-            db = await get_lp_db()
-            cursor = await db.execute(
-                "SELECT id, text FROM predefined_comments WHERE is_active = 1"
-            )
-            rows = await cursor.fetchall()
-            if hasattr(rows[0] if rows else None, "keys"):
-                comment_rows = [dict(r) for r in rows]
-            else:
-                comment_rows = [{"id": r[0], "text": r[1]} for r in rows] if rows else []
-
-            if not comment_rows:
-                logger.error(
-                    "No active predefined comments for action %s", action.get("id")
-                )
-                return False
-
-            candidates = [r["text"] for r in comment_rows]
-
-            # 2. Extract post text + existing comments for context
+            # --- AI comment generation ---
+            # 1. Extract post text + last 5 existing comments for tone context
             post_text = ""
-            existing_comments_text = ""
+            existing_comments: list[str] = []
             try:
                 extract_result = await extract_post_text(page, profile_url)
                 post_text = extract_result.get("post_text") or ""
-                comment_count = extract_result.get("comment_count", 0)
-                existing_comments = extract_result.get("existing_comments", [])
-
-                # Enforce minimum comments check before AI selection
-                if comment_count < MIN_EXISTING_COMMENTS:
-                    logger.info(
-                        "Post has %d comments (min %d required). Skipping action %s.",
-                        comment_count, MIN_EXISTING_COMMENTS, action.get("id"),
-                    )
-                    return False  # treated as failure, scheduler marks it
+                existing_comments = extract_result.get("existing_comments", [])[:5]
 
                 if existing_comments:
-                    existing_comments_text = "\n".join(
-                        f"- {c}" for c in existing_comments[:10]
-                    )
                     logger.info(
-                        "Extracted %d existing comments for AI context",
+                        "Extracted %d existing comments for AI tone context",
                         len(existing_comments),
                     )
                 if post_text:
                     logger.info(
-                        "Extracted post text (%d chars) for AI comment selection",
+                        "Extracted post text (%d chars) for AI comment generation",
                         len(post_text),
                     )
             except Exception as exc:
                 logger.warning("Post text extraction failed: %s", exc)
 
-            # 3. Build context with post text + existing comments
-            ai_context = post_text
-            if existing_comments_text:
-                ai_context += f"\n\nExisting comments on this post:\n{existing_comments_text}"
+            if not post_text:
+                logger.error(
+                    "No post text extracted for action %s — cannot generate comment",
+                    action.get("id"),
+                )
+                return False
 
-            # 4. Ask AI to pick best comment (falls back to random if VPS down)
-            ai_result = await ask_ai_for_comment(ai_context, candidates)
+            # 2. Ask AI to generate an original comment
+            ai_result = await generate_ai_comment(
+                post_text=post_text,
+                existing_comments=existing_comments,
+                tone="professional",
+            )
             comment_text = ai_result.get("comment_text", "")
             confidence = ai_result.get("confidence", 0.0)
-            selected_idx = ai_result.get("selected_index", -1)
 
             if not comment_text:
-                comment_text = random.choice(candidates)
-                logger.warning("AI returned empty — using random comment")
+                logger.error(
+                    "AI failed to generate comment for action %s", action.get("id")
+                )
+                return False
 
             logger.info(
-                "Comment selected (confidence=%.2f): %.60s...",
+                "AI generated comment (confidence=%.2f): %.80s...",
                 confidence,
                 comment_text,
             )
 
-            # 5. Update action_queue with selected comment + bump usage_count
-            action_id = action.get("id")
+            # 3. Save the generated comment to action_queue
+            db = await get_lp_db()
             await db.execute(
                 "UPDATE action_queue SET comment_text = ? WHERE id = ?",
-                (comment_text, action_id),
+                (comment_text, action.get("id")),
             )
-            if 0 <= selected_idx < len(comment_rows):
-                await db.execute(
-                    "UPDATE predefined_comments SET usage_count = usage_count + 1 WHERE id = ?",
-                    (comment_rows[selected_idx]["id"],),
-                )
             await db.commit()
 
         result = await comment_on_latest_post(page, profile_url, comment_text, company_page)
