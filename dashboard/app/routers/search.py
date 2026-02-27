@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from app.config import TEMPLATES_DIR
 from app.database import get_lp_db
 from app.automation.browser import browser_manager
+from app.automation.linkedin_search import _lookup_geo_urn_local, GEO_URN_MAP
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -157,6 +158,21 @@ async def geo_lookup(request: Request, q: str = "", sender_id: str = ""):
     if not q or len(q) < 2:
         return JSONResponse([])
 
+    # 1. Check hardcoded mapping first (instant, no browser needed)
+    query_lower = q.strip().lower()
+    local_matches = []
+    for name, geo_id in GEO_URN_MAP.items():
+        if name.startswith(query_lower) or query_lower in name:
+            # Capitalize the display name nicely
+            display_name = name.title()
+            urn = f"urn:li:geo:{geo_id}"
+            if not any(m["geoUrn"] == urn for m in local_matches):
+                local_matches.append({"name": display_name, "geoUrn": urn})
+    if local_matches:
+        logger.info("Geo typeahead for '%s' matched %d from local mapping", q, len(local_matches))
+        return JSONResponse(local_matches[:10])
+
+    # 2. Try LinkedIn typeahead API via browser
     # Parse sender_id safely (JS may send empty string)
     try:
         sid = int(sender_id) if sender_id else 0

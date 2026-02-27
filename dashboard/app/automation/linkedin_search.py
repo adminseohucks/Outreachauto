@@ -22,6 +22,158 @@ logger = logging.getLogger(__name__)
 QUERY_ID = "voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0"
 
 # ---------------------------------------------------------------------------
+# Hardcoded geo URN mapping for common countries/regions.
+# LinkedIn's typeahead API is unreliable (404s), so we use this as
+# primary fallback for country-level searches.
+# Source: LinkedIn geo URN IDs (verified against LinkedIn search URLs).
+# ---------------------------------------------------------------------------
+GEO_URN_MAP: dict[str, str] = {
+    # Countries
+    "united kingdom": "101165590",
+    "uk": "101165590",
+    "great britain": "101165590",
+    "england": "101165590",
+    "united states": "103644278",
+    "usa": "103644278",
+    "us": "103644278",
+    "america": "103644278",
+    "india": "102713980",
+    "japan": "101355337",
+    "germany": "101282230",
+    "deutschland": "101282230",
+    "france": "105015875",
+    "canada": "101174742",
+    "australia": "101452733",
+    "brazil": "106057199",
+    "china": "102890883",
+    "italy": "103350119",
+    "spain": "105646813",
+    "mexico": "103323778",
+    "netherlands": "102890719",
+    "holland": "102890719",
+    "switzerland": "106693272",
+    "sweden": "105117694",
+    "south korea": "105149562",
+    "korea": "105149562",
+    "singapore": "102454443",
+    "ireland": "104738515",
+    "belgium": "100565514",
+    "austria": "103883259",
+    "norway": "103819153",
+    "denmark": "104514075",
+    "finland": "100456013",
+    "poland": "105072130",
+    "portugal": "100364837",
+    "russia": "101728296",
+    "turkey": "102105699",
+    "israel": "101620260",
+    "south africa": "104035573",
+    "uae": "104305776",
+    "united arab emirates": "104305776",
+    "dubai": "104305776",
+    "saudi arabia": "100459316",
+    "new zealand": "105490917",
+    "indonesia": "102478259",
+    "malaysia": "106808692",
+    "philippines": "103121230",
+    "thailand": "105146118",
+    "vietnam": "104195383",
+    "pakistan": "101022442",
+    "bangladesh": "106871199",
+    "nigeria": "105365761",
+    "egypt": "106155005",
+    "argentina": "100446943",
+    "colombia": "100876405",
+    "chile": "104621616",
+    "peru": "102927786",
+    "czech republic": "104508036",
+    "czechia": "104508036",
+    "romania": "106670623",
+    "hungary": "100288700",
+    "ukraine": "102264497",
+    "greece": "104677530",
+    "taiwan": "104187078",
+    "hong kong": "103291313",
+    "scotland": "100501126",
+    "wales": "104325837",
+    # Major cities
+    "london": "90009496",
+    "new york": "105080838",
+    "san francisco": "102277331",
+    "los angeles": "102448103",
+    "chicago": "103112676",
+    "toronto": "100025096",
+    "sydney": "101028004",
+    "melbourne": "100260623",
+    "mumbai": "106164952",
+    "bangalore": "105214831",
+    "bengaluru": "105214831",
+    "delhi": "116753883",
+    "new delhi": "116753883",
+    "hyderabad": "105556991",
+    "chennai": "106340041",
+    "pune": "114806696",
+    "dubai city": "104305776",
+    "berlin": "103035651",
+    "paris": "105528734",
+    "tokyo": "101838753",
+    "shanghai": "103873152",
+    "beijing": "103873993",
+    "sao paulo": "106478078",
+    "amsterdam": "102011674",
+    "dublin": "105178154",
+    "zurich": "101318387",
+    "munich": "100851997",
+    "barcelona": "101985149",
+    "madrid": "105383571",
+    "rome": "101231427",
+    "milan": "103028454",
+    "stockholm": "106686728",
+    "oslo": "100645073",
+    "copenhagen": "104681028",
+    "helsinki": "116496683",
+    "warsaw": "101851067",
+    "lisbon": "104898705",
+    "brussels": "101797929",
+    "vienna": "100850888",
+    "vancouver": "103366113",
+    "montreal": "104649306",
+    "seattle": "104116203",
+    "boston": "102380872",
+    "austin": "104472866",
+    "dallas": "103020188",
+    "houston": "103743442",
+    "atlanta": "106057766",
+    "denver": "100882797",
+    "miami": "101300203",
+    "washington dc": "104383534",
+    "manchester": "100694774",
+    "birmingham": "100694231",
+    "edinburgh": "100540382",
+    "leeds": "103814662",
+    "glasgow": "104292185",
+    "bristol": "103039432",
+    "liverpool": "107421250",
+    "cambridge": "101861859",
+    "oxford": "106104061",
+}
+
+
+def _lookup_geo_urn_local(location_text: str) -> str | None:
+    """Look up geo URN from hardcoded mapping. Returns full URN or None."""
+    if not location_text:
+        return None
+    key = location_text.strip().lower()
+    geo_id = GEO_URN_MAP.get(key)
+    if geo_id:
+        return f"urn:li:geo:{geo_id}"
+    # Try partial match for common patterns like "London, UK" → "london"
+    for known_key, gid in GEO_URN_MAP.items():
+        if key.startswith(known_key) or known_key.startswith(key):
+            return f"urn:li:geo:{gid}"
+    return None
+
+# ---------------------------------------------------------------------------
 # JavaScript to lookup geo URN for a location name (e.g. "Mumbai" → urn)
 # ---------------------------------------------------------------------------
 GEO_LOOKUP_JS = """
@@ -448,14 +600,24 @@ def _extract_company(headline: str) -> str:
 
 
 async def _resolve_geo_urn(page: Page, location_text: str) -> Optional[str]:
-    """Resolve a location name to a LinkedIn geoUrn using typeahead API."""
+    """Resolve a location name to a LinkedIn geoUrn.
+
+    Strategy: 1) hardcoded mapping (instant), 2) LinkedIn typeahead API.
+    """
     if not location_text or not location_text.strip():
         return None
 
+    # 1. Try hardcoded mapping first (instant, no API call)
+    local_urn = _lookup_geo_urn_local(location_text)
+    if local_urn:
+        logger.info("Resolved '%s' -> %s (from local mapping)", location_text, local_urn)
+        return local_urn
+
+    # 2. Try LinkedIn typeahead API
     try:
         result = await page.evaluate(GEO_LOOKUP_JS, location_text.strip())
         if result and "geoUrn" in result:
-            logger.info("Resolved '%s' -> %s", location_text, result["geoUrn"])
+            logger.info("Resolved '%s' -> %s (from API)", location_text, result["geoUrn"])
             return result["geoUrn"]
         else:
             error = result.get("error", "Unknown") if result else "No response"
