@@ -331,11 +331,15 @@ async ({ keywords, start, count, filtersList }) => {
             credentials: 'include',
         });
 
-        if (!resp.ok) return { error: 'API returned ' + resp.status + ' ' + resp.statusText };
+        if (!resp.ok) {
+            let body = '';
+            try { body = await resp.text(); } catch(e) {}
+            return { error: 'API returned ' + resp.status + ' ' + resp.statusText, debugUrl: url.substring(0, 300), debugBody: body.substring(0, 500) };
+        }
         const data = await resp.json();
         return data;
     } catch (e) {
-        return { error: e.message };
+        return { error: e.message, debugUrl: url.substring(0, 300) };
     }
 }
 """
@@ -715,7 +719,13 @@ async def search_people(
 
         if "error" in raw:
             error_msg = raw["error"]
+            debug_url = raw.get("debugUrl", "")
+            debug_body = raw.get("debugBody", "")
             logger.error("Search failed at start=%d: %s", start, error_msg)
+            if debug_url:
+                logger.error("Request URL: %s", debug_url)
+            if debug_body:
+                logger.error("Response body: %s", debug_body)
             break
 
         leads = _parse_search_results(raw)
