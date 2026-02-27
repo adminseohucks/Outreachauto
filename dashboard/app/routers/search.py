@@ -1,11 +1,12 @@
 """LinkedPilot v2 — LinkedIn Search router.
 
 Search LinkedIn people using sender's authenticated browser session.
-Supports search, add results to list, and profile enrichment.
+Supports search with filters: location, network degree, company size.
 """
 
 import logging
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -23,34 +24,49 @@ logger = logging.getLogger(__name__)
 _last_search_results: list[dict] = []
 
 
-@router.get("/search", response_class=HTMLResponse)
-async def search_page(request: Request):
-    """Show the LinkedIn search page."""
-    db = await get_lp_db()
-
-    # Get senders for the "Search As" dropdown
-    cursor = await db.execute(
-        "SELECT id, name FROM senders WHERE status IN ('active', 'paused') ORDER BY name"
-    )
-    senders = [dict(r) for r in await cursor.fetchall()]
-
-    # Check which senders have browser open
-    for s in senders:
-        s["browser_open"] = browser_manager.is_open(s["id"])
-
-    # Get lists for "Add to List"
-    cursor = await db.execute("SELECT id, name FROM custom_lists ORDER BY name")
-    lists = [dict(r) for r in await cursor.fetchall()]
-
-    return templates.TemplateResponse("search.html", {
+def _build_template_context(request, senders, lists, **extra):
+    """Build the base template context for search page."""
+    ctx = {
         "request": request,
         "senders": senders,
         "lists": lists,
         "results": [],
         "search_query": "",
+        "search_location": "",
+        "search_network": "",
+        "search_company_size": "",
         "total_results": 0,
         "active_page": "search",
-    })
+    }
+    ctx.update(extra)
+    return ctx
+
+
+async def _get_senders_and_lists():
+    """Fetch senders with browser status and lists."""
+    db = await get_lp_db()
+
+    cursor = await db.execute(
+        "SELECT id, name FROM senders WHERE status IN ('active', 'paused') ORDER BY name"
+    )
+    senders = [dict(r) for r in await cursor.fetchall()]
+    for s in senders:
+        s["browser_open"] = browser_manager.is_open(s["id"])
+
+    cursor = await db.execute("SELECT id, name FROM custom_lists ORDER BY name")
+    lists = [dict(r) for r in await cursor.fetchall()]
+
+    return senders, lists
+
+
+@router.get("/search", response_class=HTMLResponse)
+async def search_page(request: Request):
+    """Show the LinkedIn search page."""
+    senders, lists = await _get_senders_and_lists()
+    return templates.TemplateResponse(
+        "search.html",
+        _build_template_context(request, senders, lists),
+    )
 
 
 @router.post("/search/run")
@@ -59,67 +75,74 @@ async def run_search(
     keywords: str = Form(...),
     sender_id: int = Form(...),
     max_results: int = Form(100),
+    location: str = Form(""),
+    network: str = Form(""),
+    company_size: str = Form(""),
 ):
     """Execute a LinkedIn people search using the sender's browser."""
     global _last_search_results
     from app.automation.linkedin_search import search_people
 
-    db = await get_lp_db()
+    senders, lists = await _get_senders_and_lists()
+    extra = {
+        "search_query": keywords,
+        "search_location": location,
+        "search_network": network,
+        "search_company_size": company_size,
+    }
 
     # Validate sender has browser open
     if not browser_manager.is_open(sender_id):
-        cursor = await db.execute(
-            "SELECT id, name FROM senders WHERE status IN ('active', 'paused') ORDER BY name"
-        )
-        senders = [dict(r) for r in await cursor.fetchall()]
-        for s in senders:
-            s["browser_open"] = browser_manager.is_open(s["id"])
-        cursor = await db.execute("SELECT id, name FROM custom_lists ORDER BY name")
-        lists = [dict(r) for r in await cursor.fetchall()]
-
-        return templates.TemplateResponse("search.html", {
-            "request": request,
-            "senders": senders,
-            "lists": lists,
-            "results": [],
-            "search_query": keywords,
-            "total_results": 0,
-            "error": "Browser is not open for this sender. Go to Senders page and open browser first.",
-            "active_page": "search",
-        })
+        return templates.TemplateResponse("search.html", _build_template_context(
+            request, senders, lists,
+            error="Browser is not open for this sender. Go to Senders page and click 'Open Chrome & Login' first.",
+            **extra,
+        ))
 
     # Cap at 999
     max_results = min(max_results, 999)
 
+    # Parse filters
+    network_filter = None
+    if network:
+        network_filter = [network]  # e.g. ["F"], ["S"], ["O"]
+
+    company_size_filter = None
+    if company_size:
+        company_size_filter = [company_size]
+
     try:
         page = await browser_manager.get_page(sender_id)
-        results = await search_people(page, keywords, max_results=max_results)
+        results, search_error = await search_people(
+            page,
+            keywords,
+            max_results=max_results,
+            location=location,
+            network=network_filter,
+            company_size=company_size_filter,
+        )
     except Exception as exc:
         logger.error("Search failed: %s", exc)
         results = []
+        search_error = str(exc)
 
     # Cache results
     _last_search_results = results
 
-    # Get senders and lists for the template
-    cursor = await db.execute(
-        "SELECT id, name FROM senders WHERE status IN ('active', 'paused') ORDER BY name"
-    )
-    senders = [dict(r) for r in await cursor.fetchall()]
-    for s in senders:
-        s["browser_open"] = browser_manager.is_open(s["id"])
-    cursor = await db.execute("SELECT id, name FROM custom_lists ORDER BY name")
-    lists = [dict(r) for r in await cursor.fetchall()]
+    error = None
+    if search_error:
+        if results:
+            error = f"Partial results. Warning: {search_error}"
+        else:
+            error = f"Search failed: {search_error}"
 
-    return templates.TemplateResponse("search.html", {
-        "request": request,
-        "senders": senders,
-        "lists": lists,
-        "results": results,
-        "search_query": keywords,
-        "total_results": len(results),
-        "active_page": "search",
-    })
+    return templates.TemplateResponse("search.html", _build_template_context(
+        request, senders, lists,
+        results=results,
+        total_results=len(results),
+        error=error,
+        **extra,
+    ))
 
 
 @router.post("/search/add-to-list")

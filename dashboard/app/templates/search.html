@@ -5,15 +5,21 @@
 <section>
     <hgroup>
         <h2>LinkedIn Search</h2>
-        <p>Search LinkedIn for people. Add results to lists for campaigns.</p>
+        <p>Search LinkedIn for people using Voyager API. Add results to lists for campaigns.</p>
     </hgroup>
 
     <!-- Search Form -->
     <form method="post" action="/search/run" id="search-form">
         <div class="grid">
             <label>Search Keywords <small>(required)</small>
-                <input type="text" name="keywords" placeholder="e.g. Software Engineer India, CEO Fintech Mumbai" value="{{ search_query or '' }}" required>
+                <input type="text" name="keywords" placeholder="e.g. Software Engineer, CEO Fintech, Product Manager" value="{{ search_query or '' }}" required>
             </label>
+            <label>Location <small>(optional)</small>
+                <input type="text" name="location" placeholder="e.g. Mumbai, India, United States" value="{{ search_location or '' }}">
+            </label>
+        </div>
+
+        <div class="grid">
             <label>Search Using Account
                 <select name="sender_id" required>
                     <option value="">-- Select sender --</option>
@@ -33,7 +39,29 @@
                     <option value="999">999</option>
                 </select>
             </label>
+            <label>Network
+                <select name="network">
+                    <option value="" {% if not search_network %}selected{% endif %}>All Connections</option>
+                    <option value="F" {% if search_network == 'F' %}selected{% endif %}>1st Degree</option>
+                    <option value="S" {% if search_network == 'S' %}selected{% endif %}>2nd Degree</option>
+                    <option value="O" {% if search_network == 'O' %}selected{% endif %}>3rd+ Degree</option>
+                </select>
+            </label>
+            <label>Company Size
+                <select name="company_size">
+                    <option value="" {% if not search_company_size %}selected{% endif %}>Any Size</option>
+                    <option value="B" {% if search_company_size == 'B' %}selected{% endif %}>1-10 employees</option>
+                    <option value="C" {% if search_company_size == 'C' %}selected{% endif %}>11-50 employees</option>
+                    <option value="D" {% if search_company_size == 'D' %}selected{% endif %}>51-200 employees</option>
+                    <option value="E" {% if search_company_size == 'E' %}selected{% endif %}>201-500 employees</option>
+                    <option value="F" {% if search_company_size == 'F' %}selected{% endif %}>501-1,000 employees</option>
+                    <option value="G" {% if search_company_size == 'G' %}selected{% endif %}>1,001-5,000 employees</option>
+                    <option value="H" {% if search_company_size == 'H' %}selected{% endif %}>5,001-10,000 employees</option>
+                    <option value="I" {% if search_company_size == 'I' %}selected{% endif %}>10,001+ employees</option>
+                </select>
+            </label>
         </div>
+
         <button type="submit" id="search-btn">Search LinkedIn</button>
     </form>
 
@@ -46,12 +74,12 @@
     <!-- Results Section -->
     {% if results|length > 0 %}
     <hr>
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h3>Search Results <small>({{ total_results }} found)</small></h3>
-        <div style="display: flex; gap: 0.5rem;">
-            <button class="outline" onclick="selectAllResults(true)">Select All</button>
-            <button class="outline secondary" onclick="selectAllResults(false)">Deselect All</button>
-            <button id="btn-add-results" onclick="openAddToListModal()" disabled>Add to List</button>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+        <h3 style="margin: 0;">Search Results <small>({{ total_results }} found)</small></h3>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="outline" onclick="selectAllResults(true)" style="font-size: 0.85rem;">Select All</button>
+            <button class="outline secondary" onclick="selectAllResults(false)" style="font-size: 0.85rem;">Deselect All</button>
+            <button id="btn-add-results" onclick="openAddToListModal()" disabled style="font-size: 0.85rem;">Add to List</button>
         </div>
     </div>
 
@@ -61,7 +89,7 @@
                 <th><input type="checkbox" onchange="selectAllResults(this.checked)"></th>
                 <th>#</th>
                 <th>Name</th>
-                <th>Title</th>
+                <th>Title / Headline</th>
                 <th>Company</th>
                 <th>Location</th>
             </tr>
@@ -94,19 +122,25 @@
         <div style="padding: 1rem; font-size: 0.9rem;">
             <ol>
                 <li><strong>Open a sender's browser</strong> — Go to Senders page and click "Open Chrome & Login"</li>
-                <li><strong>Make sure they're logged in</strong> — Verify login status on Senders page</li>
-                <li><strong>Come here and search</strong> — Enter keywords like "Software Engineer Bengaluru" or "CTO Fintech India"</li>
-                <li><strong>Select results</strong> — Use checkboxes to select people you want</li>
+                <li><strong>Make sure they're logged in</strong> — Verify login on Senders page</li>
+                <li><strong>Come here and search</strong> — Enter keywords and filters</li>
+                <li><strong>Select results</strong> — Use checkboxes to select people</li>
                 <li><strong>Add to List</strong> — Add selected results to a new or existing list</li>
-                <li><strong>Create Campaign</strong> — Go to Lists page, select your list, and start a like/comment/connect campaign</li>
+                <li><strong>Create Campaign</strong> — Go to Lists, select your list, start a campaign</li>
             </ol>
             <p><strong>Search tips:</strong></p>
             <ul>
-                <li>Use job titles: "Senior Software Engineer"</li>
-                <li>Combine with location: "Product Manager Mumbai"</li>
+                <li>Job title: "Senior Software Engineer"</li>
+                <li>Location: Use the Location field for better filtering</li>
                 <li>Company + role: "Data Scientist Flipkart"</li>
-                <li>Industry keywords: "CEO SaaS startup India"</li>
+                <li>Industry: "CEO SaaS startup"</li>
                 <li>Max 999 results per search (LinkedIn limit)</li>
+            </ul>
+            <p><strong>Filters:</strong></p>
+            <ul>
+                <li><strong>Location</strong> — Type city/country name (e.g. "Mumbai", "India")</li>
+                <li><strong>Network</strong> — 1st degree (connected), 2nd degree, 3rd+</li>
+                <li><strong>Company Size</strong> — Filter by employer company size</li>
             </ul>
         </div>
     </details>
@@ -148,9 +182,10 @@
 <script>
 // Show loading state when searching
 document.getElementById('search-form').addEventListener('submit', function() {
-    document.getElementById('search-btn').setAttribute('aria-busy', 'true');
-    document.getElementById('search-btn').textContent = 'Searching LinkedIn...';
-    document.getElementById('search-btn').disabled = true;
+    var btn = document.getElementById('search-btn');
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'Searching LinkedIn...';
+    btn.disabled = true;
 });
 
 function selectAllResults(checked) {
@@ -163,8 +198,8 @@ function getSelectedIndices() {
 }
 
 function updateAddButton() {
-    const count = getSelectedIndices().length;
-    const btn = document.getElementById('btn-add-results');
+    var count = getSelectedIndices().length;
+    var btn = document.getElementById('btn-add-results');
     if (btn) {
         btn.disabled = count === 0;
         btn.textContent = count > 0 ? 'Add ' + count + ' to List' : 'Add to List';
@@ -172,7 +207,7 @@ function updateAddButton() {
 }
 
 function openAddToListModal() {
-    const indices = getSelectedIndices();
+    var indices = getSelectedIndices();
     if (!indices.length) return;
     document.getElementById('atl-count').textContent = indices.length + ' people selected';
     document.getElementById('atl-form-section').style.display = 'block';
@@ -181,9 +216,9 @@ function openAddToListModal() {
 }
 
 function submitAddToList() {
-    const indices = getSelectedIndices();
-    const listName = document.getElementById('atl-list-name').value;
-    const newListName = document.getElementById('atl-new-list').value;
+    var indices = getSelectedIndices();
+    var listName = document.getElementById('atl-list-name').value;
+    var newListName = document.getElementById('atl-new-list').value;
 
     if (!listName && !newListName) {
         alert('Please select a list or create a new one.');
@@ -195,14 +230,14 @@ function submitAddToList() {
     document.getElementById('atl-result-msg').setAttribute('aria-busy', 'true');
     document.getElementById('atl-result-msg').textContent = 'Adding leads to list...';
 
-    const formData = new FormData();
+    var formData = new FormData();
     formData.append('list_name', listName);
     formData.append('new_list_name', newListName);
     formData.append('selected_indices', indices.join(','));
 
     fetch('/search/add-to-list', { method: 'POST', body: formData })
-    .then(r => r.json())
-    .then(data => {
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
         document.getElementById('atl-result-msg').removeAttribute('aria-busy');
         if (data.success) {
             document.getElementById('atl-result-msg').innerHTML =
@@ -213,7 +248,7 @@ function submitAddToList() {
             document.getElementById('atl-result-msg').innerHTML = '<strong style="color: var(--lp-red);">Failed</strong>';
         }
     })
-    .catch(() => {
+    .catch(function() {
         document.getElementById('atl-result-msg').removeAttribute('aria-busy');
         document.getElementById('atl-result-msg').innerHTML = '<strong style="color: var(--lp-red);">Network error</strong>';
     });
