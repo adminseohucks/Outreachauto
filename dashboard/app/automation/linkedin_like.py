@@ -69,13 +69,15 @@ async def like_latest_post(
     }
 
     # ------------------------------------------------------------------
-    # 1. Navigate to profile
+    # 1. Navigate to the profile's activity page (where posts are listed)
+    #    The main profile page only shows a summary — no like buttons.
     # ------------------------------------------------------------------
+    activity_url = profile_url.rstrip("/") + "/recent-activity/all/"
     try:
-        await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(activity_url, wait_until="domcontentloaded", timeout=30000)
         await human_delay.random_delay(2, 4)
     except Exception as exc:
-        result["error"] = f"Failed to navigate to profile: {exc}"
+        result["error"] = f"Failed to navigate to activity page: {exc}"
         logger.error(result["error"])
         return result
 

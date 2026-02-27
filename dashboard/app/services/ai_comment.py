@@ -171,7 +171,32 @@ async def generate_ai_comment(
 
     except Exception as exc:
         logger.warning("VPS AI generate-comment failed: %s", exc)
+        # Fallback: pick a generic professional comment so campaign doesn't stall
+        fallback = _pick_fallback_comment()
+        if fallback:
+            logger.info("Using fallback comment: %s", fallback)
+            return {"comment_text": fallback, "confidence": 0.1}
         return {"comment_text": "", "confidence": 0.0}
+
+
+# Generic fallback comments used when VPS AI is unreachable
+_FALLBACK_COMMENTS = [
+    "Great insights, thanks for sharing!",
+    "Really appreciate you sharing this perspective.",
+    "This is very insightful, thank you for posting.",
+    "Valuable thoughts, thanks for putting this out there.",
+    "Well said! Thanks for sharing this with your network.",
+    "Interesting perspective, appreciate you sharing.",
+    "Great post, this resonates with me. Thanks for sharing!",
+    "Thanks for sharing these valuable insights.",
+    "Really thoughtful post, appreciate the perspective.",
+    "This is spot on. Thanks for sharing your thoughts.",
+]
+
+
+def _pick_fallback_comment() -> str:
+    """Pick a random fallback comment."""
+    return random.choice(_FALLBACK_COMMENTS) if _FALLBACK_COMMENTS else ""
 
 
 async def check_vps_health() -> dict:
