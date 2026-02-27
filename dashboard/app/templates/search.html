@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}LinkedIn Search — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<section>
+    <hgroup>
+        <h2>LinkedIn Search</h2>
+        <p>Search LinkedIn for people. Add results to lists for campaigns.</p>
+    </hgroup>
+
+    <!-- Search Form -->
+    <form method="post" action="/search/run" id="search-form">
+        <div class="grid">
+            <label>Search Keywords <small>(required)</small>
+                <input type="text" name="keywords" placeholder="e.g. Software Engineer India, CEO Fintech Mumbai" value="{{ search_query or '' }}" required>
+            </label>
+            <label>Search Using Account
+                <select name="sender_id" required>
+                    <option value="">-- Select sender --</option>
+                    {% for s in senders %}
+                    <option value="{{ s.id }}" {% if not s.browser_open %}disabled{% endif %}>
+                        {{ s.name }} {% if s.browser_open %}(Online){% else %}(Browser closed){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Max Results
+                <select name="max_results">
+                    <option value="50">50</option>
+                    <option value="100" selected>100</option>
+                    <option value="250">250</option>
+                    <option value="500">500</option>
+                    <option value="999">999</option>
+                </select>
+            </label>
+        </div>
+        <button type="submit" id="search-btn">Search LinkedIn</button>
+    </form>
+
+    {% if error is defined and error %}
+    <article style="background: #fef2f2; border-left: 4px solid #e53e3e; padding: 1rem; margin: 1rem 0;">
+        <strong>Error:</strong> {{ error }}
+    </article>
+    {% endif %}
+
+    <!-- Results Section -->
+    {% if results|length > 0 %}
+    <hr>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h3>Search Results <small>({{ total_results }} found)</small></h3>
+        <div style="display: flex; gap: 0.5rem;">
+            <button class="outline" onclick="selectAllResults(true)">Select All</button>
+            <button class="outline secondary" onclick="selectAllResults(false)">Deselect All</button>
+            <button id="btn-add-results" onclick="openAddToListModal()" disabled>Add to List</button>
+        </div>
+    </div>
+
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th><input type="checkbox" onchange="selectAllResults(this.checked)"></th>
+                <th>#</th>
+                <th>Name</th>
+                <th>Title</th>
+                <th>Company</th>
+                <th>Location</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for lead in results %}
+            <tr>
+                <td><input type="checkbox" class="result-cb" value="{{ loop.index0 }}" onchange="updateAddButton()"></td>
+                <td>{{ loop.index }}</td>
+                <td>
+                    <a href="{{ lead.profile_url }}" target="_blank" rel="noopener">{{ lead.full_name }}</a>
+                </td>
+                <td>{{ lead.headline or '' }}</td>
+                <td>{{ lead.company or '' }}</td>
+                <td>{{ lead.location or '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% elif search_query and not (error is defined and error) %}
+    <article style="text-align: center; padding: 2rem; margin-top: 1rem;">
+        <h3>No results found</h3>
+        <p>Try different keywords or check if the sender is logged into LinkedIn.</p>
+    </article>
+    {% endif %}
+
+    <!-- How to use -->
+    <details style="margin-top: 2rem;">
+        <summary><strong>How to use LinkedIn Search</strong></summary>
+        <div style="padding: 1rem; font-size: 0.9rem;">
+            <ol>
+                <li><strong>Open a sender's browser</strong> — Go to Senders page and click "Open Chrome & Login"</li>
+                <li><strong>Make sure they're logged in</strong> — Verify login status on Senders page</li>
+                <li><strong>Come here and search</strong> — Enter keywords like "Software Engineer Bengaluru" or "CTO Fintech India"</li>
+                <li><strong>Select results</strong> — Use checkboxes to select people you want</li>
+                <li><strong>Add to List</strong> — Add selected results to a new or existing list</li>
+                <li><strong>Create Campaign</strong> — Go to Lists page, select your list, and start a like/comment/connect campaign</li>
+            </ol>
+            <p><strong>Search tips:</strong></p>
+            <ul>
+                <li>Use job titles: "Senior Software Engineer"</li>
+                <li>Combine with location: "Product Manager Mumbai"</li>
+                <li>Company + role: "Data Scientist Flipkart"</li>
+                <li>Industry keywords: "CEO SaaS startup India"</li>
+                <li>Max 999 results per search (LinkedIn limit)</li>
+            </ul>
+        </div>
+    </details>
+</section>
+
+<!-- Add to List Modal -->
+<div class="modal-overlay" id="add-to-list-modal">
+    <div class="modal-content" style="max-width: 420px;">
+        <header>
+            <h3>Add Search Results to List</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('add-to-list-modal')" type="button">&times;</button>
+        </header>
+        <div id="atl-form-section">
+            <p id="atl-count" style="font-size: 0.9rem; margin-bottom: 1rem;"></p>
+            <label>Existing List
+                <select id="atl-list-name">
+                    <option value="">-- Select list --</option>
+                    {% for lst in lists %}
+                    <option value="{{ lst.name }}">{{ lst.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Or create new list
+                <input type="text" id="atl-new-list" placeholder="e.g. Q1 Outreach Leads">
+            </label>
+            <fieldset class="grid">
+                <button type="button" onclick="submitAddToList()">Add to List</button>
+                <button type="button" class="secondary" onclick="closeModal('add-to-list-modal')">Cancel</button>
+            </fieldset>
+        </div>
+        <div id="atl-result-section" style="display: none; text-align: center; padding: 1rem;">
+            <p id="atl-result-msg"></p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Show loading state when searching
+document.getElementById('search-form').addEventListener('submit', function() {
+    document.getElementById('search-btn').setAttribute('aria-busy', 'true');
+    document.getElementById('search-btn').textContent = 'Searching LinkedIn...';
+    document.getElementById('search-btn').disabled = true;
+});
+
+function selectAllResults(checked) {
+    document.querySelectorAll('.result-cb').forEach(cb => cb.checked = checked);
+    updateAddButton();
+}
+
+function getSelectedIndices() {
+    return Array.from(document.querySelectorAll('.result-cb:checked')).map(cb => cb.value);
+}
+
+function updateAddButton() {
+    const count = getSelectedIndices().length;
+    const btn = document.getElementById('btn-add-results');
+    if (btn) {
+        btn.disabled = count === 0;
+        btn.textContent = count > 0 ? 'Add ' + count + ' to List' : 'Add to List';
+    }
+}
+
+function openAddToListModal() {
+    const indices = getSelectedIndices();
+    if (!indices.length) return;
+    document.getElementById('atl-count').textContent = indices.length + ' people selected';
+    document.getElementById('atl-form-section').style.display = 'block';
+    document.getElementById('atl-result-section').style.display = 'none';
+    openModal('add-to-list-modal');
+}
+
+function submitAddToList() {
+    const indices = getSelectedIndices();
+    const listName = document.getElementById('atl-list-name').value;
+    const newListName = document.getElementById('atl-new-list').value;
+
+    if (!listName && !newListName) {
+        alert('Please select a list or create a new one.');
+        return;
+    }
+
+    document.getElementById('atl-form-section').style.display = 'none';
+    document.getElementById('atl-result-section').style.display = 'block';
+    document.getElementById('atl-result-msg').setAttribute('aria-busy', 'true');
+    document.getElementById('atl-result-msg').textContent = 'Adding leads to list...';
+
+    const formData = new FormData();
+    formData.append('list_name', listName);
+    formData.append('new_list_name', newListName);
+    formData.append('selected_indices', indices.join(','));
+
+    fetch('/search/add-to-list', { method: 'POST', body: formData })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('atl-result-msg').removeAttribute('aria-busy');
+        if (data.success) {
+            document.getElementById('atl-result-msg').innerHTML =
+                '<strong>Done!</strong> Added ' + data.added + ' leads to "' + data.list_name + '"' +
+                '<br><br><a href="/leads" role="button" class="outline">View Leads</a> ' +
+                '<a href="/lists" role="button" class="outline secondary">View Lists</a>';
+        } else {
+            document.getElementById('atl-result-msg').innerHTML = '<strong style="color: var(--lp-red);">Failed</strong>';
+        }
+    })
+    .catch(() => {
+        document.getElementById('atl-result-msg').removeAttribute('aria-busy');
+        document.getElementById('atl-result-msg').innerHTML = '<strong style="color: var(--lp-red);">Network error</strong>';
+    });
+}
+</script>
+{% endblock %}

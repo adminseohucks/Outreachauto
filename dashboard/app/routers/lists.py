@@ -153,3 +153,24 @@ async def delete_list(request: Request, list_id: int):
     await db.execute("DELETE FROM custom_lists WHERE id = ?", (list_id,))
     await db.commit()
     return RedirectResponse(url="/lists", status_code=303)
+
+
+@router.post("/lists/{list_id}/leads/{lead_id}/delete")
+async def delete_lead_from_list(request: Request, list_id: int, lead_id: int):
+    """Delete a single lead from a list."""
+    db = await get_lp_db()
+    await db.execute(
+        "DELETE FROM custom_list_leads WHERE id = ? AND list_id = ?",
+        (lead_id, list_id),
+    )
+    # Update lead count
+    cursor = await db.execute(
+        "SELECT COUNT(*) AS cnt FROM custom_list_leads WHERE list_id = ?", (list_id,)
+    )
+    row = await cursor.fetchone()
+    await db.execute(
+        "UPDATE custom_lists SET lead_count = ? WHERE id = ?",
+        (row["cnt"] if row else 0, list_id),
+    )
+    await db.commit()
+    return RedirectResponse(url=f"/lists/{list_id}", status_code=303)

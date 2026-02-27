@@ -16,6 +16,7 @@
         <button onclick="openModal('upload-csv-modal')">Upload CSV</button>
         <button class="secondary" onclick="openModal('campaign-modal'); document.getElementById('campaign-type-like').checked = true;">Start Like Campaign</button>
         <button class="secondary" onclick="openModal('campaign-modal'); document.getElementById('campaign-type-comment').checked = true;">Start Comment Campaign</button>
+        <button class="outline" id="btn-delete-leads" onclick="deleteSelectedLeads()" disabled style="color: var(--lp-red, #e53e3e); border-color: var(--lp-red, #e53e3e);">Delete Selected</button>
         <a href="/lists" role="button" class="outline secondary">Back to Lists</a>
     </div>
 
@@ -23,6 +24,7 @@
     <table class="data-table">
         <thead>
             <tr>
+                <th><input type="checkbox" onchange="document.querySelectorAll('.ld-cb').forEach(c=>c.checked=this.checked); updateDelBtn();"></th>
                 <th>Name</th>
                 <th>Headline</th>
                 <th>Company</th>
@@ -30,11 +32,13 @@
                 <th>Liked</th>
                 <th>Commented</th>
                 <th>Last Action</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for lead in leads %}
             <tr>
+                <td><input type="checkbox" class="ld-cb" value="{{ lead.id }}" onchange="updateDelBtn()"></td>
                 <td>
                     {% if lead.profile_url %}
                     <a href="{{ lead.profile_url }}" target="_blank" rel="noopener">{{ lead.full_name }}</a>
@@ -48,10 +52,15 @@
                 <td>{% if lead.is_liked %}<span style="color: var(--lp-green);">&#10003;</span>{% else %}&mdash;{% endif %}</td>
                 <td>{% if lead.is_commented %}<span style="color: var(--lp-green);">&#10003;</span>{% else %}&mdash;{% endif %}</td>
                 <td>{{ lead.last_action_at[:16]|replace('T', ' ') if lead.last_action_at else '&mdash;' }}</td>
+                <td>
+                    <form method="post" action="/lists/{{ list_info.id }}/leads/{{ lead.id }}/delete" style="margin:0; display: inline;" onsubmit="return confirm('Delete this lead?')">
+                        <button type="submit" class="outline" style="font-size: 0.65rem; padding: 0.15rem 0.4rem; color: var(--lp-red, #e53e3e); border-color: var(--lp-red, #e53e3e);">Remove</button>
+                    </form>
+                </td>
             </tr>
             {% else %}
             <tr>
-                <td colspan="7" style="text-align: center;">No leads in this list. Upload a CSV or add leads from the Lead Browser.</td>
+                <td colspan="9" style="text-align: center;">No leads in this list. Upload a CSV, search LinkedIn, or add leads manually.</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -156,4 +165,30 @@
         </form>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateDelBtn() {
+    const count = document.querySelectorAll('.ld-cb:checked').length;
+    document.getElementById('btn-delete-leads').disabled = count === 0;
+}
+
+function deleteSelectedLeads() {
+    const ids = Array.from(document.querySelectorAll('.ld-cb:checked')).map(c => c.value);
+    if (!ids.length) return;
+    if (!confirm('Delete ' + ids.length + ' lead(s)? This cannot be undone.')) return;
+
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/leads/delete';
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'lead_ids';
+    input.value = ids.join(',');
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+}
+</script>
 {% endblock %}

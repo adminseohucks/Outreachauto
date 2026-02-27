@@ -45,7 +45,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # --- Import and register routers ---
-from app.routers import dashboard, leads, lists, campaigns, comments, settings_page, logs, senders, api, ext_api
+from app.routers import dashboard, leads, lists, campaigns, comments, settings_page, logs, senders, api, ext_api, search
 
 app.include_router(dashboard.router)
 app.include_router(leads.router)
@@ -55,5 +55,6 @@ app.include_router(comments.router)
 app.include_router(settings_page.router)
 app.include_router(logs.router)
 app.include_router(senders.router)
+app.include_router(search.router)
 app.include_router(api.router)
 app.include_router(ext_api.router)
