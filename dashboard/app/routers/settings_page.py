@@ -12,6 +12,29 @@ router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
+@router.get("/api/vps-health-fragment", response_class=HTMLResponse)
+async def vps_health_fragment(request: Request):
+    """Return VPS status as an HTML fragment for HTMX lazy-load."""
+    vps_status = await check_vps_health()
+    is_healthy = vps_status.get("status") == "healthy"
+    latency = vps_status.get("latency_ms", -1)
+
+    color = "var(--lp-green)" if is_healthy else "var(--lp-red)"
+    label = "Connected" if is_healthy else "Disconnected"
+
+    html = f"""
+    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+        <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: {color};"></span>
+        <strong>{label}</strong>
+    </div>
+    <div style="font-size: 0.85rem; margin-bottom: 1rem;">
+        <p style="margin-bottom: 0.25rem;"><strong>Status:</strong> {vps_status.get('status', 'unknown')}</p>
+        {"<p style='margin-bottom: 0.25rem;'><strong>Latency:</strong> " + str(latency) + "ms</p>" if latency >= 0 else ""}
+    </div>
+    """
+    return HTMLResponse(html)
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     """Show all settings and VPS connection status."""
@@ -22,8 +45,8 @@ async def settings_page(request: Request):
     rows = await cursor.fetchall()
     settings = {row["key"]: row["value"] for row in rows}
 
-    # Check VPS health
-    vps_status = await check_vps_health()
+    # Return page immediately — VPS status will be fetched via HTMX
+    vps_status = {"status": "checking", "latency_ms": -1}
 
     return templates.TemplateResponse("settings.html", {
         "request": request,
@@ -31,6 +54,13 @@ async def settings_page(request: Request):
         "vps_status": vps_status,
         "active_page": "settings",
     })
+
+
+@router.get("/api/vps-health")
+async def vps_health_api(request: Request):
+    """Return VPS health as JSON — called async by frontend after page load."""
+    vps_status = await check_vps_health()
+    return vps_status
 
 
 @router.post("/settings/save")

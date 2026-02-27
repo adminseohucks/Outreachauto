@@ -248,24 +248,20 @@ async def get_lead_stats() -> dict:
     async with aiosqlite.connect(CRM_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        async with db.execute("SELECT COUNT(*) as total FROM leads") as cursor:
-            row = await cursor.fetchone()
-            total = row["total"] if row else 0
-
+        # Single query instead of 3 separate ones
         async with db.execute(
-            "SELECT COUNT(*) as cnt FROM leads WHERE status = 'connected'"
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'connected' THEN 1 ELSE 0 END) AS connected,
+                SUM(CASE WHEN status = 'qualified' THEN 1 ELSE 0 END) AS qualified
+            FROM leads
+            """
         ) as cursor:
             row = await cursor.fetchone()
-            connected = row["cnt"] if row else 0
-
-        async with db.execute(
-            "SELECT COUNT(*) as cnt FROM leads WHERE status = 'qualified'"
-        ) as cursor:
-            row = await cursor.fetchone()
-            qualified = row["cnt"] if row else 0
 
     return {
-        "total": total,
-        "connected": connected,
-        "qualified": qualified,
+        "total": row["total"] if row else 0,
+        "connected": row["connected"] if row else 0,
+        "qualified": row["qualified"] if row else 0,
     }

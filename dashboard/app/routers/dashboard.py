@@ -17,33 +17,29 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 @router.get("/", response_class=HTMLResponse)
 async def dashboard_home(request: Request):
     """Main dashboard page with stats, activity log, and sender cards."""
+    import asyncio
+
     db = await get_lp_db()
     today = date.today().isoformat()
 
-    # --- Lead stats from CRM (read-only) ---
-    lead_stats = await get_lead_stats()
+    # --- Run CRM lead_stats concurrently with local DB queries ---
+    lead_stats_task = asyncio.create_task(get_lead_stats())
 
-    # --- Active senders ---
+    # --- Senders ---
     cursor = await db.execute("SELECT * FROM senders ORDER BY name")
     senders = [dict(row) for row in await cursor.fetchall()]
     active_senders = [s for s in senders if s["status"] == "active"]
 
-    # --- Today's totals across all senders ---
+    # --- Today's totals: likes + comments in one query ---
     cursor = await db.execute(
-        "SELECT COALESCE(SUM(count), 0) AS total "
-        "FROM daily_counters WHERE date = ? AND action_type = 'like'",
+        "SELECT action_type, COALESCE(SUM(count), 0) AS total "
+        "FROM daily_counters WHERE date = ? AND action_type IN ('like', 'comment') "
+        "GROUP BY action_type",
         (today,),
     )
-    row = await cursor.fetchone()
-    likes_today = row["total"] if row else 0
-
-    cursor = await db.execute(
-        "SELECT COALESCE(SUM(count), 0) AS total "
-        "FROM daily_counters WHERE date = ? AND action_type = 'comment'",
-        (today,),
-    )
-    row = await cursor.fetchone()
-    comments_today = row["total"] if row else 0
+    totals = {row["action_type"]: row["total"] for row in await cursor.fetchall()}
+    likes_today = totals.get("like", 0)
+    comments_today = totals.get("comment", 0)
 
     # --- Active campaigns ---
     cursor = await db.execute(
@@ -80,6 +76,9 @@ async def dashboard_home(request: Request):
             "comments_today": stats.get("comment", 0),
             "connects_today": stats.get("connect", 0),
         })
+
+    # --- Await CRM stats (ran concurrently) ---
+    lead_stats = await lead_stats_task
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request,

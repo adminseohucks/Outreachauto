@@ -10,23 +10,15 @@
         <h3>VPS Connection</h3>
         <p>Remote browser automation server status</p>
     </hgroup>
-    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
-        <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: {{ 'var(--lp-green)' if vps_status and vps_status.connected else 'var(--lp-red)' }};"></span>
-        <strong>{{ 'Connected' if vps_status and vps_status.connected else 'Disconnected' }}</strong>
+    <div id="vps-status-box"
+         hx-get="/api/vps-health-fragment"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+            <span aria-busy="true" style="font-size: 0.85rem;"></span>
+            <strong>Checking VPS connection...</strong>
+        </div>
     </div>
-    {% if vps_status %}
-    <div style="font-size: 0.85rem; margin-bottom: 1rem;">
-        {% if vps_status.url %}
-        <p style="margin-bottom: 0.25rem;"><strong>URL:</strong> {{ vps_status.url }}</p>
-        {% endif %}
-        {% if vps_status.latency is defined and vps_status.latency is not none %}
-        <p style="margin-bottom: 0.25rem;"><strong>Latency:</strong> {{ vps_status.latency }}ms</p>
-        {% endif %}
-        {% if vps_status.model %}
-        <p style="margin-bottom: 0.25rem;"><strong>Model:</strong> {{ vps_status.model }}</p>
-        {% endif %}
-    </div>
-    {% endif %}
     <form method="post" action="/settings/test-vps" style="margin: 0;">
         <button type="submit" class="outline">Test Connection</button>
     </form>

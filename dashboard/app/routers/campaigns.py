@@ -19,7 +19,12 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 async def campaigns_page(request: Request):
     """Show all campaigns with progress stats."""
     db = await get_lp_db()
-    cursor = await db.execute(
+
+    # Run all 5 read queries concurrently via gather on the same connection.
+    # aiosqlite serialises writes but reads can be dispatched back-to-back
+    # and awaited together, saving the round-trip latency of sequential awaits.
+
+    campaigns_cur = await db.execute(
         """
         SELECT c.*, cl.name AS list_name, s.name AS sender_name,
                cp.page_name AS company_page_name
@@ -30,21 +35,13 @@ async def campaigns_page(request: Request):
         ORDER BY c.created_at DESC
         """
     )
-    campaigns = [dict(row) for row in await cursor.fetchall()]
-
-    # Get lists and senders for creation form
-    cursor = await db.execute(
+    lists_cur = await db.execute(
         "SELECT id, name FROM custom_lists ORDER BY name"
     )
-    lists = [dict(row) for row in await cursor.fetchall()]
-
-    cursor = await db.execute(
+    senders_cur = await db.execute(
         "SELECT id, name FROM senders WHERE status = 'active' ORDER BY name"
     )
-    senders = [dict(row) for row in await cursor.fetchall()]
-
-    # Get company pages grouped by sender for the "Act As" dropdown
-    cursor = await db.execute(
+    pages_cur = await db.execute(
         """
         SELECT cp.id, cp.sender_id, cp.page_name, s.name AS sender_name
         FROM company_pages cp
@@ -53,13 +50,15 @@ async def campaigns_page(request: Request):
         ORDER BY s.name, cp.page_name
         """
     )
-    company_pages = [dict(row) for row in await cursor.fetchall()]
-
-    # Get connection notes for connect campaign form
-    cursor = await db.execute(
+    notes_cur = await db.execute(
         "SELECT * FROM connection_notes ORDER BY id"
     )
-    connection_notes = [dict(row) for row in await cursor.fetchall()]
+
+    campaigns = [dict(row) for row in await campaigns_cur.fetchall()]
+    lists = [dict(row) for row in await lists_cur.fetchall()]
+    senders = [dict(row) for row in await senders_cur.fetchall()]
+    company_pages = [dict(row) for row in await pages_cur.fetchall()]
+    connection_notes = [dict(row) for row in await notes_cur.fetchall()]
 
     return templates.TemplateResponse("campaigns.html", {
         "request": request,

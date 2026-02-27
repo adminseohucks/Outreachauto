@@ -33,14 +33,26 @@
         {% block content %}{% endblock %}
     </main>
 
-    <!-- Live activity ticker at bottom -->
+    <!-- Live activity ticker at bottom — deferred until page loads -->
     <footer class="container-fluid" id="activity-ticker">
-        <div hx-ext="sse" sse-connect="/api/activity-stream" sse-swap="activity">
+        <div id="sse-container">
             <small id="live-feed">Connecting to live feed...</small>
         </div>
     </footer>
 
     <script src="/static/js/app.js"></script>
+    <script>
+    // Defer SSE connection until page is fully rendered
+    window.addEventListener("load", function() {
+        var el = document.getElementById("sse-container");
+        if (el) {
+            el.setAttribute("hx-ext", "sse");
+            el.setAttribute("sse-connect", "/api/activity-stream");
+            el.setAttribute("sse-swap", "activity");
+            htmx.process(el);
+        }
+    });
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>
