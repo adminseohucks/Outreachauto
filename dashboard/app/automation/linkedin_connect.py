@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 CONNECT_BUTTON_SELECTORS = [
     'button[aria-label*="Invite"][aria-label*="to connect"]',
     'button.pvs-profile-actions__action[aria-label*="connect"]',
+    'button.pvs-profile-actions__action[aria-label*="Connect"]',
     'button[aria-label*="Connect"]',
     'div.pvs-profile-actions button:has-text("Connect")',
+    'div.pv-top-card-v2-ctas button:has-text("Connect")',
     'main section button:has-text("Connect")',
     'main button:has-text("Connect")',
 ]
@@ -36,7 +38,9 @@ MORE_BUTTON_SELECTORS = [
     'button.artdeco-dropdown__trigger[aria-label*="More"]',
     'div.pvs-profile-actions button[aria-label*="More"]',
     'div.pvs-profile-actions__overflow-toggle button',
+    'div.pv-top-card-v2-ctas button[aria-label*="More"]',
     'section.artdeco-card button[aria-label*="More"]',
+    'button.artdeco-button--muted[aria-label*="More"]',
 ]
 
 # Connect option inside the "More" dropdown menu
@@ -47,6 +51,7 @@ MORE_CONNECT_SELECTORS = [
     'div.artdeco-dropdown__content span:has-text("Connect")',
     'div.artdeco-dropdown__content button:has-text("Connect")',
     'ul[role="menu"] li:has-text("Connect")',
+    'div.artdeco-dropdown__content-inner span:has-text("Connect")',
 ]
 
 # "How do you know …" dialog – pick any option to proceed
@@ -55,12 +60,16 @@ HOW_DO_YOU_KNOW_SELECTORS = [
     'label:has-text("Other")',
     'button:has-text("Other")',
     'fieldset button',
+    'div[role="dialog"] button:has-text("Other")',
+    'div.artdeco-modal button:has-text("Other")',
 ]
 
 # "Add a note" button in the connect dialog
 ADD_NOTE_BUTTON_SELECTORS = [
     'button[aria-label="Add a note"]',
     'button:has-text("Add a note")',
+    'div[role="dialog"] button:has-text("Add a note")',
+    'div.artdeco-modal button:has-text("Add a note")',
 ]
 
 # Note text area in the connect dialog
@@ -72,6 +81,7 @@ NOTE_INPUT_SELECTORS = [
     'textarea[placeholder*="personal note"]',
     'div.send-invite textarea',
     'div.artdeco-modal textarea',
+    'div[role="dialog"] textarea',
     'textarea',
 ]
 
@@ -81,6 +91,7 @@ SEND_BUTTON_SELECTORS = [
     'button[aria-label="Send now"]',
     'button[aria-label="Send"]',
     'div.artdeco-modal button:has-text("Send")',
+    'div[role="dialog"] button:has-text("Send")',
     'button:has-text("Send invitation")',
     'button:has-text("Send now")',
     'button:has-text("Send")',
@@ -90,6 +101,8 @@ SEND_BUTTON_SELECTORS = [
 SEND_WITHOUT_NOTE_SELECTORS = [
     'button[aria-label="Send without a note"]',
     'button:has-text("Send without a note")',
+    'div.artdeco-modal button:has-text("Send without a note")',
+    'div[role="dialog"] button:has-text("Send without a note")',
 ]
 
 
@@ -136,6 +149,13 @@ async def send_connection_request(
         return result
 
     await human_delay.random_delay(1, 2)
+
+    # Scroll down slightly to ensure action buttons are in view
+    try:
+        await page.evaluate("window.scrollBy(0, 300)")
+        await human_delay.random_delay(0.5, 1.0)
+    except Exception:
+        pass
 
     # ------------------------------------------------------------------
     # 3. Find the Connect button (direct or inside "More" dropdown)
@@ -197,15 +217,23 @@ async def send_connection_request(
 
     # 3c – Maybe already connected or pending
     if connect_button is None:
-        pending = await page.query_selector(
-            'button:has-text("Pending"), button:has-text("Message")'
-        )
-        if pending:
-            btn_text = await pending.inner_text()
-            result["success"] = True
-            result["skipped"] = True
-            logger.info("Already connected/pending (%s) for %s", btn_text.strip(), profile_url)
-            return result
+        for pending_sel in [
+            'button:has-text("Pending")',
+            'button:has-text("Message")',
+            'button:has-text("Following")',
+            'span:has-text("Pending")',
+            'div.pvs-profile-actions button:has-text("Message")',
+        ]:
+            try:
+                pending = await page.query_selector(pending_sel)
+                if pending and await pending.is_visible():
+                    btn_text = await pending.inner_text()
+                    result["success"] = True
+                    result["skipped"] = True
+                    logger.info("Already connected/pending (%s) for %s", btn_text.strip(), profile_url)
+                    return result
+            except Exception:
+                continue
 
         result["error"] = "Connect button not found on profile (neither direct nor under More)"
         logger.error(result["error"])

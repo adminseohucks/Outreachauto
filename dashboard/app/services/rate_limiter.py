@@ -29,26 +29,53 @@ logger = logging.getLogger(__name__)
 # IST is UTC+5:30
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# Day abbreviation to weekday number (Monday=0)
+_DAY_ABBR_TO_NUM = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+}
 
-def _daily_limit_for(action_type: str) -> int:
-    """Return the base daily limit for a given action type."""
+
+async def _get_db_setting(key: str, default: str = "") -> str:
+    """Read a single setting from the database settings table."""
+    try:
+        db = await get_lp_db()
+        cursor = await db.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        )
+        row = await cursor.fetchone()
+        if row:
+            val = row["value"] if isinstance(row, dict) else row[0]
+            return val if val else default
+        return default
+    except Exception:
+        return default
+
+
+async def _daily_limit_for(action_type: str) -> int:
+    """Return the base daily limit for a given action type (DB first, then config)."""
     if action_type == "like":
-        return DAILY_LIKE_LIMIT
+        val = await _get_db_setting("daily_like_limit", "")
+        return int(val) if val else DAILY_LIKE_LIMIT
     elif action_type == "comment":
-        return DAILY_COMMENT_LIMIT
+        val = await _get_db_setting("daily_comment_limit", "")
+        return int(val) if val else DAILY_COMMENT_LIMIT
     elif action_type == "connect":
-        return DAILY_CONNECT_LIMIT
+        val = await _get_db_setting("daily_connect_limit", "")
+        return int(val) if val else DAILY_CONNECT_LIMIT
     return 0
 
 
-def _weekly_limit_for(action_type: str) -> int:
-    """Return the base weekly limit for a given action type."""
+async def _weekly_limit_for(action_type: str) -> int:
+    """Return the base weekly limit for a given action type (DB first, then config)."""
     if action_type == "like":
-        return WEEKLY_LIKE_LIMIT
+        val = await _get_db_setting("weekly_like_limit", "")
+        return int(val) if val else WEEKLY_LIKE_LIMIT
     elif action_type == "comment":
-        return WEEKLY_COMMENT_LIMIT
+        val = await _get_db_setting("weekly_comment_limit", "")
+        return int(val) if val else WEEKLY_COMMENT_LIMIT
     elif action_type == "connect":
-        return WEEKLY_CONNECT_LIMIT
+        val = await _get_db_setting("weekly_connect_limit", "")
+        return int(val) if val else WEEKLY_CONNECT_LIMIT
     return 0
 
 
@@ -154,8 +181,8 @@ async def check_limit(sender_id: int, action_type: str) -> dict:
 
     ramp_factor = await _get_ramp_up_factor(sender_id)
 
-    daily_limit = int(_daily_limit_for(action_type) * ramp_factor)
-    weekly_limit = int(_weekly_limit_for(action_type) * ramp_factor)
+    daily_limit = int((await _daily_limit_for(action_type)) * ramp_factor)
+    weekly_limit = int((await _weekly_limit_for(action_type)) * ramp_factor)
 
     daily_used = await _get_daily_count(sender_id, action_type)
     weekly_used = await _get_weekly_count(sender_id, action_type)
@@ -206,23 +233,42 @@ async def increment_counter(sender_id: int, action_type: str) -> None:
 
 
 async def get_all_counters(sender_id: int) -> dict:
-    """Return today's like and comment counts for a sender."""
+    """Return today's like, comment, and connect counts for a sender."""
     await _ensure_counter_table()
 
     like_count = await _get_daily_count(sender_id, "like")
     comment_count = await _get_daily_count(sender_id, "comment")
+    connect_count = await _get_daily_count(sender_id, "connect")
 
     return {
         "likes": like_count,
         "comments": comment_count,
+        "connects": connect_count,
     }
 
 
 async def check_work_hours() -> bool:
-    """Return True if current IST time is within configured work hours."""
+    """Return True if current IST time is within configured work hours and work days."""
     now_ist = datetime.now(IST)
+
+    # Check work hours (DB setting overrides config)
+    start_str = await _get_db_setting("work_hour_start", "")
+    end_str = await _get_db_setting("work_hour_end", "")
+    hour_start = int(start_str) if start_str else WORK_HOUR_START
+    hour_end = int(end_str) if end_str else WORK_HOUR_END
+
     current_hour = now_ist.hour + now_ist.minute / 60.0
-    return WORK_HOUR_START <= current_hour < WORK_HOUR_END
+    if not (hour_start <= current_hour < hour_end):
+        return False
+
+    # Check work days (DB setting: comma-separated day abbreviations)
+    days_str = await _get_db_setting("work_days", "")
+    if days_str:
+        allowed_days = {_DAY_ABBR_TO_NUM.get(d.strip().lower(), -1) for d in days_str.split(",")}
+        if now_ist.weekday() not in allowed_days:
+            return False
+
+    return True
 
 
 async def check_cooldown(profile_url: str, sender_id: int) -> bool:

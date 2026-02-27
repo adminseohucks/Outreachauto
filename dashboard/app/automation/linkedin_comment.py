@@ -24,6 +24,8 @@ POST_CONTAINER_SELECTORS = [
     "div.occludable-update",
     "li.profile-creator-shared-feed-update__container",
     'div[data-urn*="activity"]',
+    'div[data-chameleon-result-urn*="activity"]',
+    'div.scaffold-finite-scroll__content > div',
 ]
 
 POST_TEXT_SELECTORS = [
@@ -31,6 +33,8 @@ POST_TEXT_SELECTORS = [
     "span.feed-shared-text__text-view",
     "div.feed-shared-text",
     "div.update-components-text",
+    "div.feed-shared-inline-show-more-text",
+    "span.break-words",
     'span[dir="ltr"]',
 ]
 
@@ -38,15 +42,21 @@ COMMENT_BUTTON_SELECTORS = [
     'button[aria-label*="Comment"]',
     'button[aria-label*="comment"]',
     "button.comment-button",
-    'button span.comment-button__text',
+    'button:has(span.comment-button__text)',
+    'button.social-actions-button:has-text("Comment")',
+    'button:has(li-icon[type="comment-medium"])',
+    'button:has(svg[data-test-icon="comment-medium"])',
 ]
 
 COMMENT_INPUT_SELECTORS = [
     'div.ql-editor[data-placeholder="Add a comment…"]',
+    'div.ql-editor[data-placeholder*="comment"]',
     "div.ql-editor",
     'div[role="textbox"][aria-label*="comment"]',
+    'div[role="textbox"][aria-label*="Comment"]',
     'div[role="textbox"][contenteditable="true"]',
     "div.comments-comment-box__form div[contenteditable]",
+    'div.comments-comment-texteditor div[contenteditable="true"]',
 ]
 
 SUBMIT_COMMENT_SELECTORS = [
@@ -54,6 +64,8 @@ SUBMIT_COMMENT_SELECTORS = [
     'button[aria-label="Post comment"]',
     'button[type="submit"].comments-comment-box__submit-button',
     'form.comments-comment-box__form button[type="submit"]',
+    'button.comments-comment-box__submit-button--cr',
+    'div.comments-comment-box button:has-text("Post")',
 ]
 
 # Selectors for existing comment items in the comment section
@@ -62,12 +74,15 @@ EXISTING_COMMENT_SELECTORS = [
     "div.comments-comment-item",
     "li.comments-comment-list__comment-item",
     'div[data-urn*="comment"]',
+    'article.comments-comment-entity',
+    'div.comments-comment-entity',
 ]
 
 EXISTING_COMMENT_TEXT_SELECTORS = [
     "span.comments-comment-item__main-content",
     "div.comments-comment-item__inline-show-more-text",
     "span.feed-shared-text__text-view",
+    "span.comments-comment-item-content-body",
     'span[dir="ltr"]',
 ]
 
@@ -77,6 +92,7 @@ COMMENT_COUNT_SELECTORS = [
     'button[aria-label*="Comment"] span',
     'span.social-details-social-counts__comments',
     'button.comment-button span',
+    'button[aria-label*="comment"] span.social-details-social-counts__item-text',
 ]
 
 # Minimum number of existing comments required before we post
@@ -314,10 +330,21 @@ async def comment_on_latest_post(
         try:
             comment_button = await post_element.query_selector(selector)
             if comment_button:
-                logger.debug("Comment button found via %s", selector)
+                logger.debug("Comment button found via %s (post-scoped)", selector)
                 break
         except Exception:
             continue
+
+    # Fallback: search the whole page if post-scoped search failed
+    if comment_button is None:
+        for selector in COMMENT_BUTTON_SELECTORS:
+            try:
+                comment_button = await page.query_selector(selector)
+                if comment_button:
+                    logger.debug("Comment button found via %s (page-wide)", selector)
+                    break
+            except Exception:
+                continue
 
     if comment_button is None:
         result["error"] = "Comment button not found on latest post"

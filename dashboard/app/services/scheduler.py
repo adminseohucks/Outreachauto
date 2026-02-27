@@ -34,13 +34,24 @@ logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def _delay_bounds(action_type: str) -> tuple[int, int]:
-    """Return (min_delay, max_delay) in seconds for the given action type."""
+async def _delay_bounds(action_type: str) -> tuple[int, int]:
+    """Return (min_delay, max_delay) in seconds for the given action type.
+
+    Reads from DB settings first, falls back to config defaults.
+    """
+    from app.services.rate_limiter import _get_db_setting
+
     if action_type == "comment":
-        return COMMENT_MIN_DELAY, COMMENT_MAX_DELAY
+        mn = await _get_db_setting("comment_delay_min", "")
+        mx = await _get_db_setting("comment_delay_max", "")
+        return (int(mn) if mn else COMMENT_MIN_DELAY, int(mx) if mx else COMMENT_MAX_DELAY)
     elif action_type == "connect":
-        return CONNECT_MIN_DELAY, CONNECT_MAX_DELAY
-    return LIKE_MIN_DELAY, LIKE_MAX_DELAY
+        mn = await _get_db_setting("connect_delay_min", "")
+        mx = await _get_db_setting("connect_delay_max", "")
+        return (int(mn) if mn else CONNECT_MIN_DELAY, int(mx) if mx else CONNECT_MAX_DELAY)
+    mn = await _get_db_setting("like_delay_min", "")
+    mx = await _get_db_setting("like_delay_max", "")
+    return (int(mn) if mn else LIKE_MIN_DELAY, int(mx) if mx else LIKE_MAX_DELAY)
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +496,7 @@ class CampaignScheduler:
                 )
 
                 # ---- 3f. Random delay based on action type ----
-                min_d, max_d = _delay_bounds(action_type)
+                min_d, max_d = await _delay_bounds(action_type)
                 delay = random.uniform(min_d, max_d)
                 logger.debug("Sleeping %.1f seconds before next action.", delay)
                 await asyncio.sleep(delay)

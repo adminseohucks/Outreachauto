@@ -45,6 +45,10 @@ async def settings_page(request: Request):
     rows = await cursor.fetchall()
     settings = {row["key"]: row["value"] for row in rows}
 
+    # Convert work_days from comma-separated string to list for template
+    if "work_days" in settings and isinstance(settings["work_days"], str):
+        settings["work_days"] = [d.strip() for d in settings["work_days"].split(",") if d.strip()]
+
     # Return page immediately — VPS status will be fetched via HTMX
     vps_status = {"status": "checking", "latency_ms": -1}
 
@@ -69,17 +73,33 @@ async def save_settings(request: Request):
     db = await get_lp_db()
     form_data = await request.form()
 
-    for key, value in form_data.items():
+    # Group all values by key (handles multi-value fields like checkboxes)
+    grouped: dict[str, list[str]] = {}
+    for key, value in form_data.multi_items():
         if key.startswith("_"):
-            # Skip internal form fields (e.g., CSRF tokens)
             continue
+        grouped.setdefault(key, []).append(str(value))
+
+    for key, values in grouped.items():
+        # Multi-value fields (e.g. work_days checkboxes) → comma-separated
+        save_value = ",".join(values) if len(values) > 1 else values[0]
         await db.execute(
             """
             INSERT INTO settings (key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
-            (key, str(value)),
+            (key, save_value),
         )
+
+    # If no work_days checkbox was checked, save empty string
+    if "work_days" not in grouped:
+        await db.execute(
+            """
+            INSERT INTO settings (key, value) VALUES ('work_days', '')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+        )
+
     await db.commit()
 
     return RedirectResponse(url="/settings", status_code=303)

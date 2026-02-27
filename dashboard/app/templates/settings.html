@@ -90,6 +90,18 @@
             </label>
         </fieldset>
 
+        <h4>Connection Request Limits</h4>
+        <fieldset class="grid">
+            <label>
+                Daily Connection Limit
+                <input type="number" name="daily_connect_limit" min="1" value="{{ settings.daily_connect_limit | default(100) }}">
+            </label>
+            <label>
+                Weekly Connection Limit
+                <input type="number" name="weekly_connect_limit" min="1" value="{{ settings.weekly_connect_limit | default(500) }}">
+            </label>
+        </fieldset>
+
         <h4>Delay Ranges (seconds)</h4>
         <fieldset class="grid">
             <label>
@@ -109,6 +121,16 @@
             <label>
                 Comment Delay Max
                 <input type="number" name="comment_delay_max" min="1" value="{{ settings.comment_delay_max | default(180) }}">
+            </label>
+        </fieldset>
+        <fieldset class="grid">
+            <label>
+                Connection Delay Min
+                <input type="number" name="connect_delay_min" min="1" value="{{ settings.connect_delay_min | default(60) }}">
+            </label>
+            <label>
+                Connection Delay Max
+                <input type="number" name="connect_delay_max" min="1" value="{{ settings.connect_delay_max | default(180) }}">
             </label>
         </fieldset>
     </article>
