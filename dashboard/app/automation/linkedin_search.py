@@ -544,19 +544,26 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
             "?keywords=CEO&origin=GLOBAL_SEARCH_HEADER"
         )
         logger.info("Navigating to LinkedIn search to capture queryId...")
-        await page.goto(search_url, timeout=30000, wait_until="networkidle")
+        # Use domcontentloaded instead of networkidle — LinkedIn's tracking
+        # scripts fire endlessly, so networkidle ALWAYS times out (30s wasted).
+        # The GraphQL search API call fires early during page load.
+        await page.goto(search_url, timeout=15000, wait_until="domcontentloaded")
 
-        # Give it a moment for any remaining API calls
-        await page.wait_for_timeout(3000)
+        # Wait briefly for the GraphQL search API call to fire
+        # (it happens right after DOM is loaded, not after all trackers finish)
+        for _ in range(10):
+            if captured["qid"]:
+                break
+            await page.wait_for_timeout(500)
 
         # Remove the route handler
         await page.unroute("**/voyager/api/graphql*", intercept_search_api)
 
         # Navigate back to avoid interfering with user's page
         if original_url and "linkedin.com" in original_url:
-            await page.goto(original_url, timeout=15000)
+            await page.goto(original_url, timeout=15000, wait_until="domcontentloaded")
         else:
-            await page.goto("https://www.linkedin.com/feed/", timeout=15000)
+            await page.goto("https://www.linkedin.com/feed/", timeout=15000, wait_until="domcontentloaded")
 
         if captured["qid"]:
             _cached_query_id = captured["qid"]
@@ -873,8 +880,8 @@ async def search_people(
     current_url = page.url
     if "linkedin.com" not in current_url:
         try:
-            await page.goto("https://www.linkedin.com/feed/", timeout=30000)
-            await page.wait_for_timeout(3000)
+            await page.goto("https://www.linkedin.com/feed/", timeout=15000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
         except Exception as exc:
             return [], f"Could not navigate to LinkedIn: {exc}"
 

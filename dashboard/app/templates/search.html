@@ -273,6 +273,16 @@ document.getElementById('search-form').addEventListener('submit', function() {
     btn.disabled = true;
 });
 
+// Reset spinner on page load (after form POST returns with results)
+window.addEventListener('load', function() {
+    var btn = document.getElementById('search-btn');
+    if (btn) {
+        btn.removeAttribute('aria-busy');
+        btn.textContent = 'Search LinkedIn';
+        btn.disabled = false;
+    }
+});
+
 function selectAllResults(checked) {
     document.querySelectorAll('.result-cb').forEach(cb => cb.checked = checked);
     updateAddButton();
