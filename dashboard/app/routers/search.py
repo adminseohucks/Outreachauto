@@ -76,6 +76,7 @@ async def run_search(
     sender_id: int = Form(...),
     max_results: int = Form(100),
     location: str = Form(""),
+    geo_urn: str = Form(""),
     network: str = Form(""),
     company_size: str = Form(""),
 ):
@@ -105,7 +106,7 @@ async def run_search(
     # Parse filters
     network_filter = None
     if network:
-        network_filter = [network]  # e.g. ["F"], ["S"], ["O"]
+        network_filter = [network]
 
     company_size_filter = None
     if company_size:
@@ -118,6 +119,7 @@ async def run_search(
             keywords,
             max_results=max_results,
             location=location,
+            geo_urn=geo_urn,
             network=network_filter,
             company_size=company_size_filter,
         )
@@ -143,6 +145,107 @@ async def run_search(
         error=error,
         **extra,
     ))
+
+
+@router.get("/search/geo-lookup")
+async def geo_lookup(request: Request, q: str = "", sender_id: int = 0):
+    """Live location autocomplete using LinkedIn's typeahead API.
+
+    Called by the search form's location input as the user types.
+    Returns a list of {name, geoUrn} matching the query.
+    """
+    if not q or len(q) < 2:
+        return JSONResponse([])
+
+    if not sender_id or not browser_manager.is_open(sender_id):
+        # Find any open sender as fallback
+        db = await get_lp_db()
+        cursor = await db.execute(
+            "SELECT id FROM senders WHERE status IN ('active', 'paused') ORDER BY id"
+        )
+        for row in await cursor.fetchall():
+            if browser_manager.is_open(row["id"]):
+                sender_id = row["id"]
+                break
+        if not sender_id or not browser_manager.is_open(sender_id):
+            return JSONResponse([])
+
+    GEO_TYPEAHEAD_JS = """
+    async (query) => {
+        const csrfToken = document.cookie
+            .split('; ')
+            .find(c => c.startsWith('JSESSIONID='))
+            ?.split('=')[1]
+            ?.replace(/"/g, '') || '';
+        if (!csrfToken) return [];
+
+        try {
+            const resp = await fetch(
+                'https://www.linkedin.com/voyager/api/typeahead/hitsV2?' +
+                new URLSearchParams({
+                    keywords: query,
+                    origin: 'GLOBAL_SEARCH_HEADER',
+                    q: 'type',
+                    type: 'GEO',
+                    count: '10',
+                }).toString(),
+                {
+                    headers: {
+                        'csrf-token': csrfToken,
+                        'accept': 'application/vnd.linkedin.normalized+json+2.1',
+                    },
+                    credentials: 'include',
+                }
+            );
+            if (!resp.ok) return [];
+            const data = await resp.json();
+
+            const results = [];
+            const included = data?.included || [];
+            const elements = data?.data?.elements || [];
+
+            // Match included items with elements to get both name and URN
+            const urnToName = {};
+            for (const el of included) {
+                const urn = el?.entityUrn || '';
+                const name = el?.defaultLocalizedName || el?.text?.text || el?.name || '';
+                if (urn && name) urnToName[urn] = name;
+            }
+
+            for (const el of elements) {
+                const urn = el?.targetUrn || '';
+                const displayText = el?.displayText?.text || el?.text?.text || '';
+                const name = displayText || urnToName[urn] || '';
+                if (urn && urn.includes('geo:') && name) {
+                    results.push({ name: name, geoUrn: urn });
+                }
+            }
+
+            // Fallback: if elements empty, use included directly
+            if (results.length === 0) {
+                for (const el of included) {
+                    const urn = el?.entityUrn || el?.targetUrn || '';
+                    const name = el?.defaultLocalizedName || el?.text?.text || '';
+                    if (urn && urn.includes('geo:') && name) {
+                        results.push({ name: name, geoUrn: urn });
+                    }
+                }
+            }
+
+            return results;
+        } catch (e) {
+            return [];
+        }
+    }
+    """
+
+    try:
+        page = await browser_manager.get_page(sender_id)
+        results = await page.evaluate(GEO_TYPEAHEAD_JS, q)
+        return JSONResponse(results or [])
+    except Exception as exc:
+        logger.warning("Geo lookup error: %s", exc)
+        return JSONResponse([])
 
 
 @router.post("/search/add-to-list")

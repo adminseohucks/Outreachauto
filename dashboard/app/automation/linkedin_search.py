@@ -356,6 +356,7 @@ async def search_people(
     keywords: str,
     max_results: int = 100,
     location: str = "",
+    geo_urn: str = "",
     network: list[str] | None = None,
     company_size: list[str] | None = None,
 ) -> tuple[list[dict], str | None]:
@@ -369,7 +370,8 @@ async def search_people(
     page : Playwright Page (must be logged into LinkedIn)
     keywords : Search keywords
     max_results : Max number of results (capped at 999)
-    location : Location text (e.g. "Mumbai", "India") — resolved to geoUrn
+    location : Location text (fallback if geo_urn not provided)
+    geo_urn : Pre-resolved LinkedIn geoUrn (from autocomplete)
     network : Connection degree filter ["F"=1st, "S"=2nd, "O"=3rd+]
     company_size : Company size codes ["B"=1-10 .. "I"=10001+]
 
@@ -391,11 +393,12 @@ async def search_people(
         except Exception as exc:
             return [], f"Could not navigate to LinkedIn: {exc}"
 
-    # Resolve location to geoUrn
-    geo_urn = None
-    if location:
-        geo_urn = await _resolve_geo_urn(page, location)
-        if not geo_urn:
+    # Use pre-resolved geoUrn from autocomplete, or resolve from text
+    if not geo_urn and location:
+        geo_urn_resolved = await _resolve_geo_urn(page, location)
+        if geo_urn_resolved:
+            geo_urn = geo_urn_resolved
+        else:
             # Fallback: append location to keywords
             keywords = f"{keywords} {location}"
             logger.info("Geo lookup failed, appending location to keywords: '%s'", keywords)

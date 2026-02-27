@@ -14,8 +14,15 @@
             <label>Search Keywords <small>(required)</small>
                 <input type="text" name="keywords" placeholder="e.g. Software Engineer, CEO Fintech, Product Manager" value="{{ search_query or '' }}" required>
             </label>
-            <label>Location <small>(optional)</small>
-                <input type="text" name="location" placeholder="e.g. Mumbai, India, United States" value="{{ search_location or '' }}">
+            <label>Location <small>(optional — type to search)</small>
+                <div style="position: relative;">
+                    <input type="text" id="location-input" autocomplete="off"
+                           placeholder="Type city or country..." value="{{ search_location or '' }}"
+                           oninput="geoLookup(this.value)" onfocus="geoLookup(this.value)">
+                    <input type="hidden" name="location" id="location-text" value="{{ search_location or '' }}">
+                    <input type="hidden" name="geo_urn" id="geo-urn-input" value="">
+                    <div id="geo-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:50; background:var(--pico-card-background-color); border:1px solid var(--pico-muted-border-color); border-radius:0 0 8px 8px; max-height:240px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+                </div>
             </label>
         </div>
 
@@ -180,6 +187,85 @@
 
 {% block scripts %}
 <script>
+// --- Location Autocomplete ---
+var geoTimer = null;
+var geoCache = {};
+
+function geoLookup(query) {
+    clearTimeout(geoTimer);
+    var dropdown = document.getElementById('geo-dropdown');
+    if (!query || query.length < 2) {
+        dropdown.style.display = 'none';
+        return;
+    }
+    // Debounce 300ms
+    geoTimer = setTimeout(function() { _doGeoLookup(query); }, 300);
+}
+
+function _doGeoLookup(query) {
+    // Check cache
+    if (geoCache[query]) {
+        _renderGeoDropdown(geoCache[query]);
+        return;
+    }
+
+    // Get a sender_id from the sender dropdown
+    var senderSel = document.querySelector('select[name="sender_id"]');
+    var senderId = senderSel ? senderSel.value : '';
+
+    fetch('/search/geo-lookup?q=' + encodeURIComponent(query) + '&sender_id=' + senderId)
+    .then(function(r) { return r.json(); })
+    .then(function(results) {
+        geoCache[query] = results;
+        _renderGeoDropdown(results);
+    })
+    .catch(function() {
+        document.getElementById('geo-dropdown').style.display = 'none';
+    });
+}
+
+function _renderGeoDropdown(results) {
+    var dropdown = document.getElementById('geo-dropdown');
+    dropdown.innerHTML = '';
+
+    if (!results || results.length === 0) {
+        dropdown.style.display = 'none';
+        return;
+    }
+
+    results.forEach(function(item) {
+        var div = document.createElement('div');
+        div.textContent = item.name;
+        div.style.cssText = 'padding:0.6rem 0.8rem; cursor:pointer; font-size:0.9rem; border-bottom:1px solid var(--pico-muted-border-color);';
+        div.onmouseenter = function() { div.style.background = 'var(--pico-primary-focus)'; };
+        div.onmouseleave = function() { div.style.background = 'transparent'; };
+        div.onclick = function() {
+            document.getElementById('location-input').value = item.name;
+            document.getElementById('location-text').value = item.name;
+            document.getElementById('geo-urn-input').value = item.geoUrn;
+            dropdown.style.display = 'none';
+        };
+        dropdown.appendChild(div);
+    });
+
+    dropdown.style.display = 'block';
+}
+
+// Close dropdown on outside click
+document.addEventListener('click', function(e) {
+    var dropdown = document.getElementById('geo-dropdown');
+    var input = document.getElementById('location-input');
+    if (dropdown && !dropdown.contains(e.target) && e.target !== input) {
+        dropdown.style.display = 'none';
+    }
+});
+
+// Clear geoUrn if user manually edits the text after selecting
+document.getElementById('location-input').addEventListener('input', function() {
+    document.getElementById('geo-urn-input').value = '';
+    document.getElementById('location-text').value = this.value;
+});
+
 // Show loading state when searching
 document.getElementById('search-form').addEventListener('submit', function() {
     var btn = document.getElementById('search-btn');
