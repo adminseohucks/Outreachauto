@@ -51,8 +51,28 @@ async def _get_db_setting(key: str, default: str = "") -> str:
         return default
 
 
-async def _daily_limit_for(action_type: str) -> int:
-    """Return the base daily limit for a given action type (DB first, then config)."""
+async def _daily_limit_for(action_type: str, sender_id: int = 0) -> int:
+    """Return the daily limit for a given action type.
+
+    Priority: per-sender DB field > global DB setting > config default.
+    """
+    # 1. Per-sender limit from senders table (highest priority)
+    if sender_id:
+        field = f"daily_{action_type}_limit"
+        try:
+            db = await get_lp_db()
+            cursor = await db.execute(
+                f"SELECT {field} FROM senders WHERE id = ?", (sender_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                val = row[field] if isinstance(row, dict) else row[0]
+                if val and int(val) > 0:
+                    return int(val)
+        except Exception:
+            pass
+
+    # 2. Global DB setting
     if action_type == "like":
         val = await _get_db_setting("daily_like_limit", "")
         return int(val) if val else DAILY_LIKE_LIMIT
@@ -65,8 +85,28 @@ async def _daily_limit_for(action_type: str) -> int:
     return 0
 
 
-async def _weekly_limit_for(action_type: str) -> int:
-    """Return the base weekly limit for a given action type (DB first, then config)."""
+async def _weekly_limit_for(action_type: str, sender_id: int = 0) -> int:
+    """Return the weekly limit for a given action type.
+
+    Priority: per-sender DB field > global DB setting > config default.
+    """
+    # 1. Per-sender limit from senders table (highest priority)
+    if sender_id:
+        field = f"weekly_{action_type}_limit"
+        try:
+            db = await get_lp_db()
+            cursor = await db.execute(
+                f"SELECT {field} FROM senders WHERE id = ?", (sender_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                val = row[field] if isinstance(row, dict) else row[0]
+                if val and int(val) > 0:
+                    return int(val)
+        except Exception:
+            pass
+
+    # 2. Global DB setting
     if action_type == "like":
         val = await _get_db_setting("weekly_like_limit", "")
         return int(val) if val else WEEKLY_LIKE_LIMIT
@@ -167,6 +207,9 @@ async def check_limit(sender_id: int, action_type: str) -> dict:
     """
     Check whether a sender is allowed to perform an action right now.
 
+    Uses per-sender limits from the senders table (set in the UI).
+    Ramp-up factor only applies when using global defaults.
+
     Returns:
         {
             allowed: bool,
@@ -179,10 +222,9 @@ async def check_limit(sender_id: int, action_type: str) -> dict:
     """
     await _ensure_counter_table()
 
-    ramp_factor = await _get_ramp_up_factor(sender_id)
-
-    daily_limit = int((await _daily_limit_for(action_type)) * ramp_factor)
-    weekly_limit = int((await _weekly_limit_for(action_type)) * ramp_factor)
+    # Use per-sender limits (no ramp-up) when sender has custom limits set
+    daily_limit = await _daily_limit_for(action_type, sender_id)
+    weekly_limit = await _weekly_limit_for(action_type, sender_id)
 
     daily_used = await _get_daily_count(sender_id, action_type)
     weekly_used = await _get_weekly_count(sender_id, action_type)
@@ -196,9 +238,6 @@ async def check_limit(sender_id: int, action_type: str) -> dict:
     elif weekly_used >= weekly_limit:
         allowed = False
         reason = f"Weekly {action_type} limit reached ({weekly_used}/{weekly_limit})"
-
-    if ramp_factor < 1.0 and not reason:
-        reason = f"Ramp-up active ({int(ramp_factor * 100)}% of full limits)"
 
     return {
         "allowed": allowed,

@@ -410,6 +410,10 @@ class CampaignScheduler:
                         "Rate limit hit for sender %s (%s): %s. Skipping action %s.",
                         sender_id, action_type, limit_result["reason"], action_id,
                     )
+                    print(
+                        f"  [Campaign {campaign_id}] RATE LIMIT: {limit_result['reason']} "
+                        f"(sender {sender_id}). Skipping."
+                    )
                     await db.execute(
                         "UPDATE action_queue SET status = 'skipped' WHERE id = ?",
                         (action_id,),
@@ -506,10 +510,23 @@ class CampaignScheduler:
                     new_status, detail_msg, lead_name=lead_name,
                 )
 
-                # ---- 3f. Random delay based on action type ----
+                # ---- 3f. Human-like random delay between actions ----
                 min_d, max_d = await _delay_bounds(action_type)
+                # Add extra randomness: sometimes short, sometimes long
                 delay = random.uniform(min_d, max_d)
-                logger.debug("Sleeping %.1f seconds before next action.", delay)
+                # Occasionally add a longer "think" pause (20% chance)
+                if random.random() < 0.2:
+                    delay += random.uniform(60, 180)
+                delay_min = int(delay // 60)
+                delay_sec = int(delay % 60)
+                logger.info(
+                    "Sleeping %dm %ds before next action (human-like delay).",
+                    delay_min, delay_sec,
+                )
+                print(
+                    f"  [Campaign {campaign_id}] Waiting {delay_min}m {delay_sec}s "
+                    f"before next action..."
+                )
                 await asyncio.sleep(delay)
 
             # ---- 4. All actions processed ----
