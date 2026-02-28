@@ -105,6 +105,23 @@ SEND_WITHOUT_NOTE_SELECTORS = [
     'div[role="dialog"] button:has-text("Send without a note")',
 ]
 
+# Email verification dialog – LinkedIn sometimes asks for email to connect
+EMAIL_REQUIRED_SELECTORS = [
+    'input[type="email"]',
+    'input[name="email"]',
+    'label:has-text("Email")',
+    'div.artdeco-modal input[type="email"]',
+    'div[role="dialog"] input[type="email"]',
+]
+
+# Connect limit / weekly invite limit reached
+INVITE_LIMIT_SELECTORS = [
+    'div:has-text("invitation limit")',
+    'div:has-text("weekly invitation")',
+    'div:has-text("too many pending")',
+    'h2:has-text("invitation limit")',
+]
+
 
 async def send_connection_request(
     page: Page,
@@ -287,6 +304,42 @@ async def send_connection_request(
         logger.debug("Modal selector timed out — continuing to look for note/send buttons")
 
     # ------------------------------------------------------------------
+    # 5b. Check for email verification requirement
+    # ------------------------------------------------------------------
+    for email_sel in EMAIL_REQUIRED_SELECTORS:
+        try:
+            email_el = await page.query_selector(email_sel)
+            if email_el and await email_el.is_visible():
+                result["error"] = "Email verification required to connect with this person"
+                result["skipped"] = True
+                logger.warning("Email required to connect with %s — skipping", profile_url)
+                # Close the dialog
+                try:
+                    await page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return result
+        except Exception:
+            continue
+
+    # ------------------------------------------------------------------
+    # 5c. Check for invite limit reached
+    # ------------------------------------------------------------------
+    for limit_sel in INVITE_LIMIT_SELECTORS:
+        try:
+            limit_el = await page.query_selector(limit_sel)
+            if limit_el and await limit_el.is_visible():
+                result["error"] = "LinkedIn weekly invitation limit reached"
+                logger.warning("Invite limit reached — cannot send more connections")
+                try:
+                    await page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return result
+        except Exception:
+            continue
+
+    # ------------------------------------------------------------------
     # 6. Add a note if provided
     # ------------------------------------------------------------------
     note_added = False
@@ -337,6 +390,23 @@ async def send_connection_request(
                 logger.warning("Failed to type note: %s", exc)
         else:
             logger.warning("Note input not found — will try sending without note")
+            # Wait briefly and retry — sometimes dialog loads slowly
+            await human_delay.random_delay(1.5, 2.5)
+            for selector in NOTE_INPUT_SELECTORS:
+                try:
+                    note_input = await page.query_selector(selector)
+                    if note_input and await note_input.is_visible():
+                        await note_input.click()
+                        await human_delay.random_delay(0.3, 0.5)
+                        for char in note_text:
+                            await page.keyboard.type(char)
+                            await human_delay.random_delay(0.06, 0.12)
+                        await human_delay.random_delay(0.5, 1.0)
+                        note_added = True
+                        logger.info("Typed connection note on retry (%d chars)", len(note_text))
+                        break
+                except Exception:
+                    continue
 
     # ------------------------------------------------------------------
     # 7. Click Send
@@ -380,7 +450,26 @@ async def send_connection_request(
         except Exception:
             pass
 
+    # Retry after brief wait — sometimes dialog renders slowly
     if send_button is None:
+        logger.info("Send button not found on first try — waiting 2s and retrying")
+        await human_delay.random_delay(1.5, 2.5)
+        for selector in SEND_BUTTON_SELECTORS + SEND_WITHOUT_NOTE_SELECTORS:
+            try:
+                send_button = await page.query_selector(selector)
+                if send_button and await send_button.is_visible():
+                    logger.info("Found Send button on retry via %s", selector)
+                    break
+                send_button = None
+            except Exception:
+                continue
+
+    if send_button is None:
+        # Close dialog before giving up
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
         result["error"] = "Send button not found in connection dialog"
         logger.error(result["error"])
         return result

@@ -223,6 +223,15 @@ class CampaignScheduler:
         self._tasks: dict[int, asyncio.Task] = {}
         # campaign_id -> Event used to signal pause/stop
         self._pause_flags: dict[int, asyncio.Event] = {}
+        # sender_id -> asyncio.Lock  (prevents two campaigns from using
+        # the same browser page simultaneously)
+        self._sender_locks: dict[int, asyncio.Lock] = {}
+
+    def _get_sender_lock(self, sender_id: int) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for the given sender."""
+        if sender_id not in self._sender_locks:
+            self._sender_locks[sender_id] = asyncio.Lock()
+        return self._sender_locks[sender_id]
 
     # ------------------------------------------------------------------
     # Public API
@@ -452,28 +461,33 @@ class CampaignScheduler:
                     )
                     continue
 
-                # ---- 3d. Execute action ----
-                await db.execute(
-                    "UPDATE action_queue SET status = 'running' WHERE id = ?",
-                    (action_id,),
-                )
-                await db.commit()
+                # ---- 3d. Execute action (with per-sender lock) ----
+                # Lock ensures only one campaign uses a sender's browser at a time.
+                # Without this, two campaigns on the same sender navigate the page
+                # simultaneously, causing "Cannot find context" errors.
+                sender_lock = self._get_sender_lock(sender_id)
+                async with sender_lock:
+                    await db.execute(
+                        "UPDATE action_queue SET status = 'running' WHERE id = ?",
+                        (action_id,),
+                    )
+                    await db.commit()
 
-                success = False
-                try:
-                    success = await _execute_action(action)
-                except Exception as exc:
-                    logger.error("Action %s failed with exception: %s", action_id, exc)
+                    success = False
+                    try:
+                        success = await _execute_action(action)
+                    except Exception as exc:
+                        logger.error("Action %s failed with exception: %s", action_id, exc)
 
-                # ---- 3e. Update status ----
-                new_status = "done" if success else "failed"
-                await db.execute(
-                    "UPDATE action_queue SET status = ?, completed_at = ? WHERE id = ?",
-                    (new_status, datetime.now(IST).isoformat(), action_id),
-                )
-                await db.commit()
+                    # ---- 3e. Update status ----
+                    new_status = "done" if success else "failed"
+                    await db.execute(
+                        "UPDATE action_queue SET status = ?, completed_at = ? WHERE id = ?",
+                        (new_status, datetime.now(IST).isoformat(), action_id),
+                    )
+                    await db.commit()
 
-                # Update campaign progress counters
+                # Update campaign progress counters (outside lock — no browser needed)
                 stat_col = "successful" if success else "failed"
                 await db.execute(
                     f"UPDATE campaigns SET processed = processed + 1, {stat_col} = {stat_col} + 1 WHERE id = ?",
