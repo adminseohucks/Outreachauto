@@ -1200,85 +1200,130 @@ _DOM_SCRAPE_JS = """
             if (!card) card = link.parentElement;
 
             // ---- Extract name ----
-            // Strategy A: span with aria-hidden="true" near the link (visible text)
+            // IMPORTANT: Skip connection degree badges (1st, 2nd, 3rd, 3rd+)
+            // and other non-name text that appears in spans inside the link.
+            const SKIP_PATTERNS = /^(1st|2nd|3rd|3rd\\+|\\d+(st|nd|rd|th)\\+?|·|\\||-|–|—|\\.\\.\\.)$/i;
+            const isNotName = (t) => {
+                if (!t || t.length < 2 || t.length > 60) return true;
+                if (SKIP_PATTERNS.test(t)) return true;
+                if (t === 'LinkedIn Member') return true;
+                if (/^(View|Follow|Connect|Message|Send|InMail|Pending)/i.test(t)) return true;
+                // A real name has at least one letter
+                if (!/[a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF\\u0600-\\u06FF\\u4e00-\\u9fff]/.test(t)) return true;
+                return false;
+            };
+
             let fullName = '';
+
+            // Strategy A: span with aria-hidden="true" near the link (visible text)
             const ariaSpans = link.querySelectorAll('span[aria-hidden="true"]');
             for (const sp of ariaSpans) {
                 const t = sp.textContent.trim();
-                if (t && t.length > 1 && t.length < 60 && !t.includes('\\n')) {
+                if (!isNotName(t) && !t.includes('\\n')) {
                     fullName = t;
                     break;
                 }
             }
-            // Strategy B: direct text of the link or its first span child
+            // Strategy B: other spans inside the link
             if (!fullName) {
                 const spans = link.querySelectorAll('span');
                 for (const sp of spans) {
                     const t = sp.textContent.trim();
-                    if (t && t.length > 1 && t.length < 60 && t !== 'LinkedIn Member' &&
-                        !t.includes('View') && !t.includes('profile')) {
+                    if (!isNotName(t)) {
                         fullName = t;
                         break;
                     }
                 }
             }
-            // Strategy C: link's own visible text
+            // Strategy C: link's own visible text (clean up degree badges)
             if (!fullName) {
-                const linkText = link.textContent.trim().split('\\n')[0].trim();
-                if (linkText && linkText.length > 1 && linkText.length < 60) {
+                let linkText = link.textContent.trim();
+                // Remove degree badges from the text
+                linkText = linkText.replace(/\\b(1st|2nd|3rd|3rd\\+)\\b/gi, '').trim();
+                linkText = linkText.split('\\n')[0].trim();
+                if (!isNotName(linkText)) {
                     fullName = linkText;
                 }
             }
-            if (!fullName || fullName === 'LinkedIn Member') continue;
+            if (!fullName) continue;
 
             // ---- Extract headline & location from the card ----
+            // LinkedIn search cards show data in order: Name → Headline → Location
+            // We collect all meaningful text blocks from the card and assign them
+            // in order, skipping the name and UI elements.
             let headline = '';
             let location = '';
 
             if (card) {
-                // Get all text blocks in the card that are NOT the name
+                // Gather all distinct text blocks in the card in DOM order
                 const textBlocks = [];
                 const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null);
                 let node;
                 while (node = walker.nextNode()) {
                     const t = node.textContent.trim();
-                    if (t && t.length > 2 && t !== fullName &&
-                        !t.includes('Connect') && !t.includes('Follow') &&
-                        !t.includes('Message') && !t.includes('View profile')) {
-                        textBlocks.push(t);
+                    if (t && t.length > 1) textBlocks.push(t);
+                }
+
+                // Filter out noise: name, degree badges, buttons, dots
+                const NOISE = new Set([
+                    'connect', 'follow', 'message', 'send', 'inmail', 'pending',
+                    '1st', '2nd', '3rd', '3rd+', '·', '|', '-', '–', '—', '...', '•',
+                    'view profile', 'view full profile', 'send inmail',
+                ]);
+                const nameLower = fullName.toLowerCase();
+                const nameFirst = fullName.split(' ')[0].toLowerCase();
+                const nameLast = fullName.split(' ').slice(-1)[0].toLowerCase();
+
+                const meaningful = [];
+                for (const t of textBlocks) {
+                    const tLower = t.toLowerCase().trim();
+                    // Skip exact name matches
+                    if (tLower === nameLower) continue;
+                    // Skip just first name or last name alone
+                    if (tLower === nameFirst || tLower === nameLast) continue;
+                    // Skip noise words
+                    if (NOISE.has(tLower)) continue;
+                    // Skip degree badges
+                    if (SKIP_PATTERNS.test(t)) continue;
+                    // Skip very short fragments (single chars, bullets)
+                    if (t.length < 3) continue;
+                    // Skip button-like text
+                    if (/^(Connect|Follow|Message|Send|View|Pending|Accept|Decline|Ignore)/i.test(t)) continue;
+                    // Skip if it contains the full name (duplicate)
+                    if (tLower.includes(nameLower) && tLower.length < nameLower.length + 5) continue;
+                    meaningful.push(t);
+                }
+
+                // LinkedIn shows: Headline first, then Location underneath.
+                // Headline is typically the job title/description (longer text).
+                // Location is typically "City, Country" or "Area Name" (shorter, has comma).
+                // Assign in order: first meaningful = headline, next = location.
+                for (const t of meaningful) {
+                    if (!headline) {
+                        headline = t;
+                    } else if (!location) {
+                        location = t;
+                        break;  // We have both, stop
                     }
                 }
 
-                // The text blocks typically appear in order: name, headline, location
-                // Filter out the name and button texts
-                const nameWords = fullName.toLowerCase().split(' ');
-                const meaningful = textBlocks.filter(t => {
-                    const tLower = t.toLowerCase();
-                    // Skip if it's just the name repeated
-                    if (tLower === fullName.toLowerCase()) return false;
-                    // Skip navigation/button text
-                    if (['connect', 'follow', 'message', 'send', 'inmail', 'pending',
-                         '1st', '2nd', '3rd', '...', '·'].includes(tLower)) return false;
-                    return true;
-                });
+                // Sanity check: if headline looks like a location and location looks
+                // like a headline, swap them
+                const looksLikeLocation = (s) => {
+                    if (!s) return false;
+                    return (
+                        s.length < 45 &&
+                        (s.includes(',') || /\\b(Area|Region|Metro|Greater|City)\\b/i.test(s)) &&
+                        !/\\b(at|@|CEO|Founder|Manager|Director|Engineer|Analyst|Officer|Lead|Head)\\b/i.test(s)
+                    );
+                };
+                const looksLikeHeadline = (s) => {
+                    if (!s) return false;
+                    return /\\b(at|@|CEO|Founder|Manager|Director|Engineer|Analyst|Officer|Lead|Head|President|VP|CTO|CFO|COO)\\b/i.test(s);
+                };
 
-                // Headline is usually the longest meaningful text after name
-                // Location is usually shorter and contains common location patterns
-                for (const t of meaningful) {
-                    if (!headline && t.length > 3) {
-                        // Check if this looks like a location (short, has comma or country-like words)
-                        const isLocation = (
-                            t.length < 40 &&
-                            (t.includes(',') || /\\b(Area|Region|Metro|City|United|India|UK|US|UAE)\\b/i.test(t))
-                        );
-                        if (isLocation && !location) {
-                            location = t;
-                        } else if (!isLocation) {
-                            headline = t;
-                        }
-                    } else if (headline && !location && t.length > 2 && t.length < 80) {
-                        location = t;
-                    }
+                if (headline && location && looksLikeLocation(headline) && looksLikeHeadline(location)) {
+                    [headline, location] = [location, headline];
                 }
             }
 
@@ -1312,9 +1357,18 @@ _DOM_SCRAPE_JS = """
                 const profileUrl = 'https://www.linkedin.com/in/' + m[1];
                 if (seenUrls.has(profileUrl)) continue;
 
-                const nameSpan = link.querySelector('span[aria-hidden="true"]') ||
-                                 link.querySelector('span');
-                const fullName = nameSpan ? nameSpan.textContent.trim() : link.textContent.trim().split('\\n')[0];
+                // Find name, skipping degree badges
+                const degreeRe = /^(1st|2nd|3rd|3rd\+|\d+(st|nd|rd|th)\+?|·|\|)$/i;
+                let fullName = '';
+                const spans = link.querySelectorAll('span[aria-hidden="true"], span');
+                for (const sp of spans) {
+                    const t = sp.textContent.trim();
+                    if (t && t.length > 1 && !degreeRe.test(t) && /[a-zA-Z]/.test(t)) {
+                        fullName = t;
+                        break;
+                    }
+                }
+                if (!fullName) fullName = link.textContent.trim().replace(/\b(1st|2nd|3rd|3rd\+)\b/gi, '').trim().split('\\n')[0];
                 if (!fullName || fullName === 'LinkedIn Member') continue;
 
                 seenUrls.add(profileUrl);
