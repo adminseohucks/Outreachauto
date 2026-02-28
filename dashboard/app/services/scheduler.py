@@ -116,6 +116,7 @@ async def _execute_action(action: dict) -> bool:
             comment_on_latest_post,
             extract_post_text,
         )
+        from app.services.ai_comment import should_skip_post
 
         comment_text = action.get("comment_text", "")
 
@@ -147,6 +148,16 @@ async def _execute_action(action: dict) -> bool:
                     "No post text extracted for action %s — cannot generate comment",
                     action.get("id"),
                 )
+                return False
+
+            # 1b. Check if post should be skipped (hiring, recruitment, etc.)
+            skip, skip_reason = should_skip_post(post_text)
+            if skip:
+                logger.info(
+                    "SKIPPING comment action %s on %s — %s",
+                    action.get("id"), profile_url, skip_reason,
+                )
+                print(f"  [Comment] SKIPPED: {skip_reason} — {profile_url}")
                 return False
 
             # 2. Ask AI to generate an original comment

@@ -2,8 +2,8 @@
 VPS AI Client for LinkedPilot v2.
 
 Sends post text and candidate comments to a remote VPS AI service with
-HMAC-SHA256 authentication. Falls back to random comment selection if the
-VPS is unreachable.
+HMAC-SHA256 authentication. Falls back to contextual comment selection if the
+VPS is unreachable.  Includes post-type filtering (skip hiring, spam, etc.).
 """
 
 import hashlib
@@ -11,14 +11,54 @@ import hmac
 import json
 import logging
 import random
+import re
 import time
-from typing import List
+from typing import List, Tuple
 
 import httpx
 
 from app.config import VPS_AI_URL, VPS_API_KEY, VPS_HEALTH_URL, VPS_SSL_VERIFY
 
 logger = logging.getLogger(__name__)
+
+
+# ── Post-type detection ──────────────────────────────────────────────────────
+
+# Patterns that indicate a post should be SKIPPED (not commented on)
+_SKIP_PATTERNS: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r"\b(we'?re|is|are)\s+hiring\b",
+        r"\bjob\s+(opening|opportunity|posting|alert|vacancy)\b",
+        r"\b(open|new)\s+(position|role|vacancy)\b",
+        r"\blooking\s+to\s+(fill|hire)\b",
+        r"\bapply\s+(now|here|today|below)\b",
+        r"\bjoin\s+our\s+team\b",
+        r"\blooking\s+for\s+(a|an)\s+\w+\s+(to join|candidate|professional|intern)\b",
+        r"\b(vacancy|vacancies|recruitment|recruiter)\b",
+        r"\b#hiring\b",
+        r"\bnow\s+hiring\b",
+        r"\bwe\s+are\s+currently\s+looking\b",
+        r"\bcurrently\s+hiring\b",
+        r"\bI'?m\s+hiring\b",
+    ]
+]
+
+
+def should_skip_post(post_text: str) -> Tuple[bool, str]:
+    """Check if a post should be skipped (hiring, recruitment, spam, etc.).
+
+    Returns:
+        (should_skip: bool, reason: str)
+    """
+    if not post_text:
+        return False, ""
+
+    for pattern in _SKIP_PATTERNS:
+        m = pattern.search(post_text)
+        if m:
+            return True, f"hiring/recruitment post (matched: '{m.group()}')"
+
+    return False, ""
 
 
 def _sign_request(timestamp: str, body: str) -> str:
@@ -146,8 +186,13 @@ async def generate_ai_comment(
     }
 
     # Build the generate-comment URL from the base VPS_AI_URL
-    base_url = VPS_AI_URL.rsplit("/", 1)[0] if "/" in VPS_AI_URL else VPS_AI_URL
-    generate_url = f"{base_url}/generate-comment"
+    # VPS_AI_URL is typically "https://host:port/api/suggest-comment"
+    # We need           "https://host:port/api/generate-comment"
+    if "/api/" in VPS_AI_URL:
+        generate_url = VPS_AI_URL.split("/api/")[0] + "/api/generate-comment"
+    else:
+        base_url = VPS_AI_URL.rsplit("/", 1)[0] if "/" in VPS_AI_URL else VPS_AI_URL
+        generate_url = f"{base_url}/generate-comment"
 
     try:
         async with httpx.AsyncClient(verify=VPS_SSL_VERIFY, timeout=30.0) as client:
@@ -171,32 +216,117 @@ async def generate_ai_comment(
 
     except Exception as exc:
         logger.warning("VPS AI generate-comment failed: %s", exc)
-        # Fallback: pick a generic professional comment so campaign doesn't stall
-        fallback = _pick_fallback_comment()
+        # Fallback: pick a CONTEXTUAL comment so campaign doesn't stall
+        fallback = _pick_contextual_fallback(post_text)
         if fallback:
-            logger.info("Using fallback comment: %s", fallback)
-            return {"comment_text": fallback, "confidence": 0.1}
+            logger.info("Using contextual fallback comment: %s", fallback)
+            return {"comment_text": fallback, "confidence": 0.15}
         return {"comment_text": "", "confidence": 0.0}
 
 
-# Generic fallback comments used when VPS AI is unreachable
-_FALLBACK_COMMENTS = [
-    "Great insights, thanks for sharing!",
-    "Really appreciate you sharing this perspective.",
-    "This is very insightful, thank you for posting.",
-    "Valuable thoughts, thanks for putting this out there.",
-    "Well said! Thanks for sharing this with your network.",
-    "Interesting perspective, appreciate you sharing.",
-    "Great post, this resonates with me. Thanks for sharing!",
-    "Thanks for sharing these valuable insights.",
-    "Really thoughtful post, appreciate the perspective.",
-    "This is spot on. Thanks for sharing your thoughts.",
+# ── Contextual fallback comment system ───────────────────────────────────────
+# Instead of generic "Great insights!", pick a comment that matches the
+# post type/topic.  Much more natural and less spammy.
+
+_ACHIEVEMENT_COMMENTS = [
+    "Congratulations! Well-deserved achievement.",
+    "That's a great milestone — congratulations!",
+    "Wonderful news, congratulations on this!",
+    "Amazing accomplishment — well done!",
+]
+
+_TIPS_COMMENTS = [
+    "Solid advice, thanks for sharing these lessons.",
+    "These are practical tips — appreciate you sharing.",
+    "Great takeaways, definitely noting these down.",
+    "Really useful advice, thank you for this.",
+]
+
+_EVENT_COMMENTS = [
+    "Sounds like a great event — thanks for sharing!",
+    "Interesting event, appreciate the highlights.",
+    "Great recap — thanks for sharing what you learned.",
+]
+
+_LAUNCH_COMMENTS = [
+    "Exciting launch — best of luck with this!",
+    "Looks promising, congratulations on the launch!",
+    "Great to see this come together. All the best!",
+]
+
+_STORY_COMMENTS = [
+    "Thanks for sharing your experience — really inspiring.",
+    "Appreciate you being open about this. Great story.",
+    "This is a powerful story, thanks for sharing.",
+]
+
+_OPINION_COMMENTS = [
+    "Really thoughtful take on this, appreciate the perspective.",
+    "Great point — this deserves more attention.",
+    "Well said, this is an important perspective.",
+]
+
+_DEFAULT_COMMENTS = [
+    "Thanks for sharing this — really valuable perspective.",
+    "Appreciate you putting this out there, very insightful.",
+    "Great post, this adds real value to the conversation.",
 ]
 
 
-def _pick_fallback_comment() -> str:
-    """Pick a random fallback comment."""
-    return random.choice(_FALLBACK_COMMENTS) if _FALLBACK_COMMENTS else ""
+def _pick_contextual_fallback(post_text: str) -> str:
+    """Pick a fallback comment that matches the post's topic/type."""
+    if not post_text:
+        return random.choice(_DEFAULT_COMMENTS)
+
+    t = post_text.lower()
+
+    # Achievement/milestone/celebration posts
+    if any(w in t for w in [
+        "congratulat", "milestone", "proud", "excited to announce",
+        "thrilled", "awarded", "certified", "graduated", "promotion",
+        "achievement", "accomplishment", "celebrating",
+    ]):
+        return random.choice(_ACHIEVEMENT_COMMENTS)
+
+    # Tips/advice/lessons posts
+    if any(w in t for w in [
+        " tip", "tips ", "advice", "lesson", "learned", "mistake",
+        "avoid", "here's what", "things i wish", "how to ", "guide",
+    ]):
+        return random.choice(_TIPS_COMMENTS)
+
+    # Event/conference posts
+    if any(w in t for w in [
+        "event", "conference", "summit", "webinar", "workshop",
+        "speaking", "keynote", "meetup", "panel",
+    ]):
+        return random.choice(_EVENT_COMMENTS)
+
+    # Product/launch posts
+    if any(w in t for w in [
+        "launch", "launched", "introducing", "new feature",
+        "release", "announcing", "just shipped",
+    ]):
+        return random.choice(_LAUNCH_COMMENTS)
+
+    # Personal story/journey posts
+    if any(w in t for w in [
+        "my journey", "my story", "i remember", "years ago",
+        "when i started", "looking back", "reflection",
+        "i was fired", "i quit", "i left", "burnout",
+    ]):
+        return random.choice(_STORY_COMMENTS)
+
+    # Opinion/thought leadership posts
+    if any(w in t for w in [
+        "i think", "i believe", "unpopular opinion", "hot take",
+        "the truth is", "we need to", "the problem with",
+        "stop doing", "start doing", "why most",
+    ]):
+        return random.choice(_OPINION_COMMENTS)
+
+    # Default
+    return random.choice(_DEFAULT_COMMENTS)
 
 
 async def check_vps_health() -> dict:
