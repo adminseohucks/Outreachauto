@@ -370,7 +370,7 @@ async () => {
 # hashes and also support dynamic extraction.
 # ---------------------------------------------------------------------------
 SEARCH_JS = """
-async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
+async ({ keywords, start, count, filtersList, dynamicQueryId, capturedTemplate, capturedHeaders }) => {
     const csrfToken = document.cookie
         .split('; ')
         .find(c => c.startsWith('JSESSIONID='))
@@ -379,7 +379,7 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
 
     if (!csrfToken) return { error: 'No CSRF token — not logged in? Please open LinkedIn and login first.' };
 
-    // Helper: fetch with a 15-second timeout (browser fetch has NO default timeout)
+    // Helper: fetch with a 15-second timeout
     async function fetchWithTimeout(url, options, timeoutMs = 15000) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -393,16 +393,86 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
         }
     }
 
-    // Clean keywords: normalize whitespace but PRESERVE quotes for boolean search
+    // Clean keywords
     const cleanKeywords = keywords.replace(/\\s+/g, ' ').trim();
     const filtersStr = filtersList || '(key:resultType,value:List(PEOPLE))';
 
-    // --- Build MULTIPLE variable formats (LinkedIn changes format periodically) ---
-    // IMPORTANT: LinkedIn ROST-style variables do NOT use URL-encoding for values.
-    // Keywords with spaces are passed as-is (e.g., keywords:Financial Analyst).
+    // Build headers — use captured headers from live request if available,
+    // otherwise use minimal required headers
+    const headers = {};
+    if (capturedHeaders && typeof capturedHeaders === 'object') {
+        // Copy relevant headers from captured live request
+        const keepHeaders = ['csrf-token', 'accept', 'x-restli-protocol-version',
+            'x-li-lang', 'x-li-page-instance', 'x-li-track', 'x-li-deco-include'];
+        for (const h of keepHeaders) {
+            if (capturedHeaders[h]) headers[h] = capturedHeaders[h];
+        }
+    }
+    // Ensure minimum required headers
+    if (!headers['csrf-token']) headers['csrf-token'] = csrfToken;
+    if (!headers['accept']) headers['accept'] = 'application/vnd.linkedin.normalized+json+2.1';
+    if (!headers['x-restli-protocol-version']) headers['x-restli-protocol-version'] = '2.0.0';
+
+    let lastError = '';
+    let attempts = 0;
+
+    // ---------------------------------------------------------------
+    // Strategy 1: If we have a captured template from LinkedIn's own
+    // request, modify it with our keywords/filters and replay
+    // ---------------------------------------------------------------
+    if (capturedTemplate && dynamicQueryId) {
+        try {
+            // Replace keywords in the captured template
+            let modifiedVars = capturedTemplate;
+            // Replace keywords:XXX with our keywords
+            modifiedVars = modifiedVars.replace(
+                /keywords:[^,)]+/,
+                'keywords:' + cleanKeywords
+            );
+            // Replace start:N with our start
+            modifiedVars = modifiedVars.replace(
+                /start:\\d+/,
+                'start:' + start
+            );
+            // Replace count:N if present
+            if (modifiedVars.includes('count:')) {
+                modifiedVars = modifiedVars.replace(
+                    /count:\\d+/,
+                    'count:' + count
+                );
+            }
+            // Replace queryParameters if we have filters
+            if (filtersStr && filtersStr !== '(key:resultType,value:List(PEOPLE))') {
+                modifiedVars = modifiedVars.replace(
+                    /queryParameters:List\\([^)]*\\)/,
+                    'queryParameters:List(' + filtersStr + ')'
+                );
+            }
+
+            const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' +
+                modifiedVars + '&queryId=' + dynamicQueryId;
+            attempts++;
+            const resp = await fetchWithTimeout(url, { headers, credentials: 'include' });
+            if (resp.ok) {
+                const data = await resp.json();
+                data._usedQueryId = dynamicQueryId;
+                data._usedFormat = 'captured-template';
+                return data;
+            }
+            lastError = 'captured-template → ' + resp.status;
+        } catch(e) {
+            lastError = 'captured-template → ' + (e.name === 'AbortError' ? 'timeout' : e.message);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Strategy 2: Construct URL manually with multiple variable formats.
+    // LinkedIn ROST variables use raw chars: (, ), :, , in URL.
+    // We do NOT encodeURIComponent the variables string.
+    // ---------------------------------------------------------------
     const variableFormats = [];
 
-    // Format 1 (2025-2026 — with count, no encodeURIComponent)
+    // Format 1: count inside outer parens at end (2025-2026 observed format)
     variableFormats.push(
         '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
         'query:(' +
@@ -413,7 +483,7 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
         'count:' + count + ')'
     );
 
-    // Format 2 (count outside query, at top level)
+    // Format 2: count at beginning, top level
     variableFormats.push(
         '(count:' + count + ',start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
         'query:(' +
@@ -423,7 +493,7 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
         'includeFiltersInResponse:false))'
     );
 
-    // Format 3 (original format without count — some hashes may still accept this)
+    // Format 3: no count (legacy)
     variableFormats.push(
         '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
         'query:(' +
@@ -433,12 +503,9 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
         'includeFiltersInResponse:false))'
     );
 
-    // List of queryId hashes to try (dynamic first, then known hashes)
+    // queryId hashes to try
     const queryIds = [];
-    if (dynamicQueryId && dynamicQueryId !== '__REST_ENDPOINT__') {
-        queryIds.push(dynamicQueryId);
-    }
-    // Known hashes (newest first) — add new ones at the top when discovered
+    if (dynamicQueryId) queryIds.push(dynamicQueryId);
     queryIds.push(
         'voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0',
         'voyagerSearchDashClusters.994bf4e7d2173b92ccdb5935710c3c5d',
@@ -446,21 +513,12 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
         'voyagerSearchDashClusters.1f5ea36a42fc3319f534af1022b6dd64',
     );
 
-    const headers = {
-        'csrf-token': csrfToken,
-        'accept': 'application/vnd.linkedin.normalized+json+2.1',
-        'x-restli-protocol-version': '2.0.0',
-    };
-
-    let lastError = '';
-    let attempts = 0;
-
-    // Try each queryId + each variable format combination
     for (const qid of queryIds) {
         for (const variables of variableFormats) {
             attempts++;
+            // RAW variables in URL (no encodeURIComponent — LinkedIn uses raw ROST format)
             const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' +
-                encodeURIComponent(variables) + '&queryId=' + qid;
+                variables + '&queryId=' + qid;
             try {
                 const resp = await fetchWithTimeout(url, { headers, credentials: 'include' });
                 if (resp.ok) {
@@ -476,31 +534,28 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
         }
     }
 
-    // --- REST endpoint fallback (also try with and without encodeURIComponent) ---
+    // ---------------------------------------------------------------
+    // Strategy 3: REST endpoint fallback
+    // ---------------------------------------------------------------
     const restQueries = [
-        // Format A: keywords NOT encoded
         '(flagshipSearchIntent:SEARCH_SRP,' +
             (cleanKeywords ? 'keywords:' + cleanKeywords + ',' : '') +
-            'queryParameters:List(' + filtersStr + '))',
-        // Format B: keywords encoded
-        '(flagshipSearchIntent:SEARCH_SRP,' +
-            (cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '') +
             'queryParameters:List(' + filtersStr + '))',
     ];
 
     for (const restQuery of restQueries) {
-        try {
-            // Try multiple decoration IDs (LinkedIn rotates these too)
-            const decoIds = [
-                'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175',
-                'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-174',
-                'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-176',
-            ];
-            for (const decoId of decoIds) {
+        const decoIds = [
+            'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175',
+            'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-174',
+            'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-176',
+        ];
+        for (const decoId of decoIds) {
+            attempts++;
+            try {
                 const restUrl = 'https://www.linkedin.com/voyager/api/search/dash/clusters?' +
                     'decorationId=' + decoId +
                     '&origin=GLOBAL_SEARCH_HEADER&q=all' +
-                    '&query=' + encodeURIComponent(restQuery) +
+                    '&query=' + restQuery +
                     '&start=' + start + '&count=' + count;
                 const resp = await fetchWithTimeout(restUrl, { headers, credentials: 'include' });
                 if (resp.ok) {
@@ -509,15 +564,15 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
                     return data;
                 }
                 lastError = 'REST decoId ' + decoId.slice(-3) + ' → ' + resp.status;
+            } catch(e) {
+                lastError += '; REST: ' + (e.name === 'AbortError' ? 'timeout' : e.message);
             }
-        } catch(e) {
-            lastError += '; REST: ' + (e.name === 'AbortError' ? 'timeout' : e.message);
         }
     }
 
     return {
-        error: 'All search endpoints failed. LinkedIn may have updated their API. Last: ' + lastError,
-        debugInfo: 'Tried ' + queryIds.length + ' hashes x ' + variableFormats.length + ' formats + REST fallback (' + attempts + ' total attempts)'
+        error: 'All search endpoints failed (' + attempts + ' attempts). Last: ' + lastError,
+        debugInfo: 'Tried captured-template + ' + queryIds.length + ' hashes x ' + variableFormats.length + ' formats + REST'
     };
 }
 """
@@ -554,25 +609,29 @@ async (vanityName) => {
 
 
 # ---------------------------------------------------------------------------
-# Module-level cache for captured queryId and URL template.
+# Module-level cache for captured queryId, URL template, and headers.
 # Reset on import (server restart).
 # ---------------------------------------------------------------------------
 _cached_query_id: str | None = None
 _cached_variables_template: str | None = None  # Full variables string from live request
+_cached_request_headers: dict | None = None  # Headers from the live request
 
 
 async def capture_query_id_via_navigation(page: Page) -> str | None:
-    """Try to extract the current queryId from LinkedIn's JS bundles.
+    """Capture a WORKING search request from LinkedIn's own JS.
+
+    The key insight: instead of guessing the API format, we trigger a real
+    LinkedIn search and intercept the EXACT request that LinkedIn makes.
+    We then reuse that queryId + URL format for our own searches.
 
     Strategies (in order):
     1. Return cached queryId (if we have one from a previous call).
     2. JS extraction from current page (no navigation).
-    3. Network interception: do a real search bar click on LinkedIn and
-       capture the GraphQL request queryId AND variables format.
+    3. Network interception: trigger a real search, capture full request.
 
     Returns the full queryId string or None.
     """
-    global _cached_query_id, _cached_variables_template
+    global _cached_query_id, _cached_variables_template, _cached_request_headers
     if _cached_query_id:
         logger.info("Using cached queryId: %s", _cached_query_id)
         print(f"  [Search] Using cached queryId: {_cached_query_id[:40]}...")
@@ -589,9 +648,9 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
     except Exception as exc:
         logger.warning("JS queryId extraction failed: %s", exc)
 
-    # Strategy 2: Network interception — capture FULL URL (queryId + variables format)
+    # Strategy 2: Network interception — capture FULL request (URL + headers)
     try:
-        captured = {"qid": None, "full_url": None}
+        captured = {"qid": None, "full_url": None, "headers": None}
 
         async def _intercept(route):
             url = route.request.url
@@ -601,6 +660,7 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
                 if match:
                     captured["qid"] = match.group(1)
                     captured["full_url"] = url
+                    captured["headers"] = dict(route.request.headers)
             await route.continue_()
 
         await page.route("**/voyager/api/graphql*", _intercept)
@@ -613,9 +673,7 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
             await search_input.click()
             await search_input.fill("test")
             await page.keyboard.press("Enter")
-            # Wait briefly for the network request
             await page.wait_for_timeout(4000)
-            # Navigate back to feed
             await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=10000)
             await page.wait_for_timeout(1000)
 
@@ -623,14 +681,17 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
 
         if captured["qid"]:
             _cached_query_id = captured["qid"]
-            # Extract the variables= portion to understand current format
             if captured["full_url"]:
                 import re
+                from urllib.parse import unquote
                 vmatch = re.search(r'variables=([^&]+)', captured["full_url"])
                 if vmatch:
-                    _cached_variables_template = vmatch.group(1)
-                    logger.info("Captured live variables format: %s", _cached_variables_template[:100])
-                    print(f"  [Search] Captured live URL format for reference")
+                    _cached_variables_template = unquote(vmatch.group(1))
+                    logger.info("Captured live variables: %s", _cached_variables_template[:120])
+                    print(f"  [Search] Captured live variables format from LinkedIn")
+            if captured["headers"]:
+                _cached_request_headers = captured["headers"]
+                logger.info("Captured %d request headers from live search", len(captured["headers"]))
             logger.info("Captured live queryId via network intercept: %s", captured["qid"])
             print(f"  [Search] Captured live queryId: {captured['qid'][:40]}...")
             return captured["qid"]
@@ -976,9 +1037,13 @@ async def search_people(
         dynamic_query_id = await capture_query_id_via_navigation(page)
     except Exception as exc:
         logger.warning("queryId extraction failed: %s", exc)
-    # No dynamic queryId is OK — SEARCH_JS has hardcoded hashes as fallback
     if not dynamic_query_id:
         print("  [Search] Using hardcoded queryId hashes (this is normal)")
+
+    # ---------------------------------------------------------------
+    # Primary: try Voyager API approach (fast, up to 49 results/page)
+    # ---------------------------------------------------------------
+    api_failed = False
 
     while start < max_results:
         count = min(batch_size, max_results - start)
@@ -999,28 +1064,33 @@ async def search_people(
                     "count": count,
                     "filtersList": filters_list,
                     "dynamicQueryId": dynamic_query_id or "",
+                    "capturedTemplate": _cached_variables_template or "",
+                    "capturedHeaders": _cached_request_headers or {},
                 },
             )
         except Exception as exc:
             error_msg = f"Browser error: {exc}"
             print(f"  [Search] ERROR in batch {batch_num}: {exc}")
             logger.error("page.evaluate failed: %s", exc)
+            api_failed = True
             break
 
         if not raw:
             error_msg = "No response from LinkedIn API"
             print(f"  [Search] ERROR: No response from LinkedIn API")
             logger.error(error_msg)
+            api_failed = True
             break
 
         if "error" in raw:
             error_msg = raw["error"]
             debug_info = raw.get("debugInfo", "")
-            print(f"  [Search] ERROR: {error_msg}")
+            print(f"  [Search] API failed: {error_msg}")
             logger.error("Search failed at start=%d: %s", start, error_msg)
             if debug_info:
                 print(f"  [Search] Debug: {debug_info}")
                 logger.error("Debug: %s", debug_info)
+            api_failed = True
             break
 
         # Log which endpoint/hash worked
@@ -1042,10 +1112,27 @@ async def search_people(
         logger.info("Got %d leads (total so far: %d)", len(leads), len(all_leads))
 
         start += batch_size
-
-        # Small delay between pages to avoid rate limiting
         if start < max_results:
             await page.wait_for_timeout(1500)
+
+    # ---------------------------------------------------------------
+    # Fallback: if API failed, scrape results from LinkedIn search page
+    # This ALWAYS works because we're just loading the search URL and
+    # reading the DOM — same as what a human sees.
+    # ---------------------------------------------------------------
+    if api_failed and not all_leads:
+        print("  [Search] API failed — falling back to DOM scraping...")
+        logger.info("API search failed, trying DOM scraping fallback")
+        dom_leads, dom_error = await _search_via_dom_scraping(
+            page, keywords, geo_urn, network, company_size, max_results
+        )
+        if dom_leads:
+            all_leads.extend(dom_leads)
+            error_msg = None  # Clear the API error since DOM worked
+            print(f"  [Search] DOM scraping got {len(dom_leads)} leads!")
+        elif dom_error:
+            error_msg = f"API failed + DOM scraping also failed: {dom_error}"
+            print(f"  [Search] DOM scraping also failed: {dom_error}")
 
     # Deduplicate by profile_url
     seen = set()
@@ -1058,6 +1145,180 @@ async def search_people(
     print(f"  [Search] DONE: {len(unique)} unique leads for '{keywords}'\n")
     logger.info("Search complete: %d unique leads for '%s'", len(unique), keywords)
     return unique, error_msg
+
+
+# ---------------------------------------------------------------------------
+# DOM Scraping search — ALWAYS works because it uses LinkedIn's own search
+# page (same URL format as browser address bar).
+# ---------------------------------------------------------------------------
+
+# JS to extract search results from the rendered LinkedIn search page DOM
+_DOM_SCRAPE_JS = """
+() => {
+    const results = [];
+    // LinkedIn search result cards: each person is in a list item with a link
+    const cards = document.querySelectorAll(
+        'li.reusable-search__result-container, ' +
+        'div.entity-result, ' +
+        'li.search-result, ' +
+        'div.search-results-container li'
+    );
+
+    for (const card of cards) {
+        try {
+            // Profile link
+            const linkEl = card.querySelector(
+                'a.app-aware-link[href*="/in/"], ' +
+                'a[href*="/in/"], ' +
+                'a.entity-result__title-text a'
+            );
+            if (!linkEl) continue;
+            let href = linkEl.getAttribute('href') || '';
+            // Clean the URL (remove query params, trailing slashes)
+            const match = href.match(/\\/in\\/([^/?]+)/);
+            if (!match) continue;
+            const profileUrl = 'https://www.linkedin.com/in/' + match[1];
+
+            // Full name
+            const nameEl = card.querySelector(
+                'span.entity-result__title-text a span[aria-hidden="true"], ' +
+                'span.entity-result__title-text span[dir="ltr"] span[aria-hidden="true"], ' +
+                'a.app-aware-link span[aria-hidden="true"], ' +
+                'span.actor-name, ' +
+                'a[href*="/in/"] span'
+            );
+            const fullName = nameEl ? nameEl.textContent.trim() : '';
+            if (!fullName || fullName === 'LinkedIn Member') continue;
+
+            // Headline (subtitle)
+            const headlineEl = card.querySelector(
+                'div.entity-result__primary-subtitle, ' +
+                'p.entity-result__summary, ' +
+                'div.linked-area div.entity-result__primary-subtitle, ' +
+                '.search-result__info p'
+            );
+            const headline = headlineEl ? headlineEl.textContent.trim() : '';
+
+            // Location (secondary subtitle)
+            const locationEl = card.querySelector(
+                'div.entity-result__secondary-subtitle, ' +
+                '.search-result__info .subline-level-2'
+            );
+            const location = locationEl ? locationEl.textContent.trim() : '';
+
+            results.push({
+                full_name: fullName,
+                first_name: fullName.split(' ')[0] || '',
+                headline: headline,
+                company: '',
+                location: location,
+                profile_url: profileUrl,
+            });
+        } catch(e) {
+            continue;
+        }
+    }
+    return results;
+}
+"""
+
+
+async def _search_via_dom_scraping(
+    page: Page,
+    keywords: str,
+    geo_urn: str = "",
+    network: list[str] | None = None,
+    company_size: list[str] | None = None,
+    max_results: int = 100,
+) -> tuple[list[dict], str | None]:
+    """Search by navigating to LinkedIn's search page and scraping the DOM.
+
+    Uses the exact same URL format as the browser address bar:
+    https://www.linkedin.com/search/results/people/?keywords=...&geoUrn=[...]
+
+    This ALWAYS works because it's the same page a human sees.
+    LinkedIn shows 10 results per page.
+    """
+    from urllib.parse import quote
+
+    all_leads: list[dict] = []
+    pages_to_scrape = min(max_results // 10, 10)  # Max 10 pages (100 results)
+
+    for page_num in range(1, pages_to_scrape + 1):
+        # Build the search URL exactly like LinkedIn's browser URL bar
+        params = [f"keywords={quote(keywords)}"]
+        params.append("origin=FACETED_SEARCH")
+
+        # geoUrn format: ["104305776"] — JSON array with quoted string
+        if geo_urn:
+            # Extract numeric ID from urn:li:geo:104305776 or raw 104305776
+            geo_id = geo_urn
+            if "geo:" in geo_urn:
+                geo_id = geo_urn.split("geo:")[-1].strip(")")
+            params.append(f'geoUrn=%5B%22{geo_id}%22%5D')
+
+        # Network filter: F=1st, S=2nd, O=3rd+
+        if network:
+            net_val = quote('["' + '","'.join(network) + '"]')
+            params.append(f"network={net_val}")
+
+        # Pagination
+        if page_num > 1:
+            params.append(f"page={page_num}")
+
+        url = "https://www.linkedin.com/search/results/people/?" + "&".join(params)
+
+        print(f"  [Search-DOM] Loading page {page_num}: {url[:80]}...")
+        logger.info("DOM scraping page %d: %s", page_num, url[:100])
+
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            # Wait for search results to render
+            await page.wait_for_timeout(3000)
+            # Scroll down to load lazy content
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+            await page.wait_for_timeout(1500)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(1500)
+        except Exception as exc:
+            logger.error("DOM scraping navigation failed: %s", exc)
+            return all_leads, f"Page load failed: {exc}"
+
+        # Extract results from DOM
+        try:
+            leads = await page.evaluate(_DOM_SCRAPE_JS)
+        except Exception as exc:
+            logger.error("DOM scraping JS failed: %s", exc)
+            return all_leads, f"DOM extraction failed: {exc}"
+
+        if not leads:
+            # Check if LinkedIn is showing "No results"
+            no_results = await page.query_selector(
+                'div.search-reusable-search-no-results, '
+                'h2.search-reusable-search-no-results__message'
+            )
+            if no_results:
+                print(f"  [Search-DOM] LinkedIn says 'No results' on page {page_num}")
+                break
+            print(f"  [Search-DOM] No leads extracted from page {page_num}")
+            break
+
+        # Extract company from headline for each lead
+        for lead in leads:
+            if not lead.get("company"):
+                lead["company"] = _extract_company(lead.get("headline", ""))
+
+        all_leads.extend(leads)
+        print(f"  [Search-DOM] Page {page_num}: got {len(leads)} leads (total: {len(all_leads)})")
+        logger.info("DOM scraping page %d: %d leads (total: %d)", page_num, len(leads), len(all_leads))
+
+        if len(all_leads) >= max_results:
+            break
+
+        # Delay between pages
+        await page.wait_for_timeout(2000)
+
+    return all_leads, None
 
 
 async def enrich_profile(page: Page, profile_url: str) -> dict:
