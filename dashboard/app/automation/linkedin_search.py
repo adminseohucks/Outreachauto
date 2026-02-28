@@ -1152,60 +1152,137 @@ async def search_people(
 # page (same URL format as browser address bar).
 # ---------------------------------------------------------------------------
 
-# JS to extract search results from the rendered LinkedIn search page DOM
+# JS to extract search results from the rendered LinkedIn search page DOM.
+# Uses a STRUCTURAL approach: find all /in/ profile links, then walk UP the
+# DOM tree to find the containing card and extract text. This is agnostic to
+# LinkedIn's CSS class names which change frequently.
 _DOM_SCRAPE_JS = """
 () => {
     const results = [];
-    // LinkedIn search result cards: each person is in a list item with a link
-    const cards = document.querySelectorAll(
-        'li.reusable-search__result-container, ' +
-        'div.entity-result, ' +
-        'li.search-result, ' +
-        'div.search-results-container li'
-    );
+    const seenUrls = new Set();
 
-    for (const card of cards) {
+    // ---- Strategy 1: Find ALL profile links on the page ----
+    // This is the most robust approach — /in/ URLs are structural and never change.
+    const allLinks = document.querySelectorAll('a[href*="/in/"]');
+
+    for (const link of allLinks) {
         try {
-            // Profile link
-            const linkEl = card.querySelector(
-                'a.app-aware-link[href*="/in/"], ' +
-                'a[href*="/in/"], ' +
-                'a.entity-result__title-text a'
-            );
-            if (!linkEl) continue;
-            let href = linkEl.getAttribute('href') || '';
-            // Clean the URL (remove query params, trailing slashes)
-            const match = href.match(/\\/in\\/([^/?]+)/);
-            if (!match) continue;
-            const profileUrl = 'https://www.linkedin.com/in/' + match[1];
+            const href = link.getAttribute('href') || '';
+            const m = href.match(/\\/in\\/([^/?#]+)/);
+            if (!m) continue;
+            const slug = m[1];
+            // Skip internal/nav links (like own profile in navbar)
+            if (slug.length < 2) continue;
+            const profileUrl = 'https://www.linkedin.com/in/' + slug;
+            if (seenUrls.has(profileUrl)) continue;
 
-            // Full name
-            const nameEl = card.querySelector(
-                'span.entity-result__title-text a span[aria-hidden="true"], ' +
-                'span.entity-result__title-text span[dir="ltr"] span[aria-hidden="true"], ' +
-                'a.app-aware-link span[aria-hidden="true"], ' +
-                'span.actor-name, ' +
-                'a[href*="/in/"] span'
-            );
-            const fullName = nameEl ? nameEl.textContent.trim() : '';
+            // Walk UP the tree to find the containing card (typically an <li> or a <div>
+            // that acts as the search result container). We look for the closest
+            // list item or a div that has multiple child sections (name, headline, etc.)
+            let card = link.closest('li') || link.closest('[data-chameleon-result-urn]') ||
+                       link.closest('[data-view-name]') || link.closest('div.mb1');
+            // Fallback: walk up until we find a container with enough text
+            if (!card) {
+                let el = link.parentElement;
+                for (let i = 0; i < 8 && el; i++) {
+                    // A search result card typically has > 30 chars of text
+                    // and is not the entire page
+                    if (el.textContent && el.textContent.trim().length > 30 &&
+                        el.textContent.trim().length < 2000 &&
+                        el.tagName !== 'MAIN' && el.tagName !== 'BODY' &&
+                        el.tagName !== 'SECTION') {
+                        card = el;
+                        break;
+                    }
+                    el = el.parentElement;
+                }
+            }
+            if (!card) card = link.parentElement;
+
+            // ---- Extract name ----
+            // Strategy A: span with aria-hidden="true" near the link (visible text)
+            let fullName = '';
+            const ariaSpans = link.querySelectorAll('span[aria-hidden="true"]');
+            for (const sp of ariaSpans) {
+                const t = sp.textContent.trim();
+                if (t && t.length > 1 && t.length < 60 && !t.includes('\\n')) {
+                    fullName = t;
+                    break;
+                }
+            }
+            // Strategy B: direct text of the link or its first span child
+            if (!fullName) {
+                const spans = link.querySelectorAll('span');
+                for (const sp of spans) {
+                    const t = sp.textContent.trim();
+                    if (t && t.length > 1 && t.length < 60 && t !== 'LinkedIn Member' &&
+                        !t.includes('View') && !t.includes('profile')) {
+                        fullName = t;
+                        break;
+                    }
+                }
+            }
+            // Strategy C: link's own visible text
+            if (!fullName) {
+                const linkText = link.textContent.trim().split('\\n')[0].trim();
+                if (linkText && linkText.length > 1 && linkText.length < 60) {
+                    fullName = linkText;
+                }
+            }
             if (!fullName || fullName === 'LinkedIn Member') continue;
 
-            // Headline (subtitle)
-            const headlineEl = card.querySelector(
-                'div.entity-result__primary-subtitle, ' +
-                'p.entity-result__summary, ' +
-                'div.linked-area div.entity-result__primary-subtitle, ' +
-                '.search-result__info p'
-            );
-            const headline = headlineEl ? headlineEl.textContent.trim() : '';
+            // ---- Extract headline & location from the card ----
+            let headline = '';
+            let location = '';
 
-            // Location (secondary subtitle)
-            const locationEl = card.querySelector(
-                'div.entity-result__secondary-subtitle, ' +
-                '.search-result__info .subline-level-2'
-            );
-            const location = locationEl ? locationEl.textContent.trim() : '';
+            if (card) {
+                // Get all text blocks in the card that are NOT the name
+                const textBlocks = [];
+                const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null);
+                let node;
+                while (node = walker.nextNode()) {
+                    const t = node.textContent.trim();
+                    if (t && t.length > 2 && t !== fullName &&
+                        !t.includes('Connect') && !t.includes('Follow') &&
+                        !t.includes('Message') && !t.includes('View profile')) {
+                        textBlocks.push(t);
+                    }
+                }
 
+                // The text blocks typically appear in order: name, headline, location
+                // Filter out the name and button texts
+                const nameWords = fullName.toLowerCase().split(' ');
+                const meaningful = textBlocks.filter(t => {
+                    const tLower = t.toLowerCase();
+                    // Skip if it's just the name repeated
+                    if (tLower === fullName.toLowerCase()) return false;
+                    // Skip navigation/button text
+                    if (['connect', 'follow', 'message', 'send', 'inmail', 'pending',
+                         '1st', '2nd', '3rd', '...', '·'].includes(tLower)) return false;
+                    return true;
+                });
+
+                // Headline is usually the longest meaningful text after name
+                // Location is usually shorter and contains common location patterns
+                for (const t of meaningful) {
+                    if (!headline && t.length > 3) {
+                        // Check if this looks like a location (short, has comma or country-like words)
+                        const isLocation = (
+                            t.length < 40 &&
+                            (t.includes(',') || /\\b(Area|Region|Metro|City|United|India|UK|US|UAE)\\b/i.test(t))
+                        );
+                        if (isLocation && !location) {
+                            location = t;
+                        } else if (!isLocation) {
+                            headline = t;
+                        }
+                    } else if (headline && !location && t.length > 2 && t.length < 80) {
+                        location = t;
+                    }
+                }
+            }
+
+            seenUrls.add(profileUrl);
             results.push({
                 full_name: fullName,
                 first_name: fullName.split(' ')[0] || '',
@@ -1218,7 +1295,117 @@ _DOM_SCRAPE_JS = """
             continue;
         }
     }
+
+    // ---- Strategy 2: If strategy 1 found nothing, try a broader approach ----
+    // Look for any element with data attributes that suggest search results
+    if (results.length === 0) {
+        const altCards = document.querySelectorAll(
+            '[data-chameleon-result-urn], [data-entity-urn], [data-view-name*="search"]'
+        );
+        for (const card of altCards) {
+            try {
+                const link = card.querySelector('a[href*="/in/"]');
+                if (!link) continue;
+                const href = link.getAttribute('href') || '';
+                const m = href.match(/\\/in\\/([^/?#]+)/);
+                if (!m) continue;
+                const profileUrl = 'https://www.linkedin.com/in/' + m[1];
+                if (seenUrls.has(profileUrl)) continue;
+
+                const nameSpan = link.querySelector('span[aria-hidden="true"]') ||
+                                 link.querySelector('span');
+                const fullName = nameSpan ? nameSpan.textContent.trim() : link.textContent.trim().split('\\n')[0];
+                if (!fullName || fullName === 'LinkedIn Member') continue;
+
+                seenUrls.add(profileUrl);
+                results.push({
+                    full_name: fullName,
+                    first_name: fullName.split(' ')[0] || '',
+                    headline: card.textContent.substring(0, 200).trim(),
+                    company: '',
+                    location: '',
+                    profile_url: profileUrl,
+                });
+            } catch(e) { continue; }
+        }
+    }
+
     return results;
+}
+"""
+
+# Diagnostic JS to understand what LinkedIn's DOM looks like when extraction fails
+_DOM_DIAGNOSTIC_JS = """
+() => {
+    const diag = {};
+    diag.url = window.location.href;
+    diag.title = document.title;
+
+    // Count all /in/ links on the page
+    const profileLinks = document.querySelectorAll('a[href*="/in/"]');
+    diag.profileLinkCount = profileLinks.length;
+    diag.sampleLinks = [];
+    for (let i = 0; i < Math.min(5, profileLinks.length); i++) {
+        const link = profileLinks[i];
+        diag.sampleLinks.push({
+            href: (link.getAttribute('href') || '').substring(0, 80),
+            text: (link.textContent || '').trim().substring(0, 60),
+            parentTag: link.parentElement ? link.parentElement.tagName : '',
+            parentClass: link.parentElement ? (link.parentElement.className || '').substring(0, 80) : '',
+            grandparentTag: (link.parentElement && link.parentElement.parentElement)
+                ? link.parentElement.parentElement.tagName : '',
+            grandparentClass: (link.parentElement && link.parentElement.parentElement)
+                ? (link.parentElement.parentElement.className || '').substring(0, 80) : '',
+        });
+    }
+
+    // Check for "No results" indicators
+    diag.noResultsFound = !!(
+        document.querySelector('[class*="no-results"]') ||
+        document.querySelector('[class*="no-result"]') ||
+        document.querySelector('[class*="empty-state"]') ||
+        (document.body.textContent && document.body.textContent.includes('No results found'))
+    );
+
+    // Count list items in main content
+    const main = document.querySelector('main') || document.body;
+    diag.mainListItems = main.querySelectorAll('li').length;
+    diag.mainDivs = main.querySelectorAll('div').length;
+
+    // Capture the main content area structure (first 1000 chars)
+    diag.mainInnerHTMLpreview = (main.innerHTML || '').substring(0, 1000);
+
+    // Check for login wall / auth wall
+    diag.hasLoginWall = !!(
+        document.querySelector('[class*="login"]') ||
+        document.querySelector('[class*="auth-wall"]') ||
+        document.querySelector('form[action*="login"]')
+    );
+
+    // Check for CAPTCHA
+    diag.hasCaptcha = !!(
+        document.querySelector('[class*="captcha"]') ||
+        document.querySelector('iframe[src*="captcha"]') ||
+        document.querySelector('#captcha')
+    );
+
+    // List all <li> elements that contain /in/ links
+    const lisWithLinks = [];
+    const allLis = main.querySelectorAll('li');
+    for (const li of allLis) {
+        const link = li.querySelector('a[href*="/in/"]');
+        if (link) {
+            lisWithLinks.push({
+                liClass: (li.className || '').substring(0, 80),
+                linkHref: (link.getAttribute('href') || '').substring(0, 80),
+                liTextLen: (li.textContent || '').trim().length,
+            });
+        }
+    }
+    diag.lisWithProfileLinks = lisWithLinks.slice(0, 5);
+    diag.lisWithProfileLinksCount = lisWithLinks.length;
+
+    return diag;
 }
 """
 
@@ -1242,7 +1429,7 @@ async def _search_via_dom_scraping(
     from urllib.parse import quote
 
     all_leads: list[dict] = []
-    pages_to_scrape = min(max_results // 10, 10)  # Max 10 pages (100 results)
+    pages_to_scrape = min(max(max_results // 10, 1), 10)  # 1-10 pages
 
     for page_num in range(1, pages_to_scrape + 1):
         # Build the search URL exactly like LinkedIn's browser URL bar
@@ -1268,21 +1455,46 @@ async def _search_via_dom_scraping(
 
         url = "https://www.linkedin.com/search/results/people/?" + "&".join(params)
 
-        print(f"  [Search-DOM] Loading page {page_num}: {url[:80]}...")
-        logger.info("DOM scraping page %d: %s", page_num, url[:100])
+        print(f"  [Search-DOM] Loading page {page_num}: {url[:100]}...")
+        logger.info("DOM scraping page %d: %s", page_num, url)
 
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            # Wait for search results to render
-            await page.wait_for_timeout(3000)
-            # Scroll down to load lazy content
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-            await page.wait_for_timeout(1500)
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(1500)
+            await page.goto(url, wait_until="domcontentloaded", timeout=25000)
         except Exception as exc:
             logger.error("DOM scraping navigation failed: %s", exc)
             return all_leads, f"Page load failed: {exc}"
+
+        # Wait for profile links to appear on the page (much more reliable
+        # than waiting a fixed time — we wait for the actual content)
+        try:
+            await page.wait_for_selector(
+                'a[href*="/in/"]', timeout=12000
+            )
+            print(f"  [Search-DOM] Profile links detected, waiting for full render...")
+        except Exception:
+            # Profile links not found within timeout — page might be empty,
+            # have CAPTCHA, or still loading. We'll continue and let
+            # diagnostic JS figure out what's wrong.
+            print(f"  [Search-DOM] No profile links detected within 12s, checking page...")
+
+        # Wait for the page to fully settle after initial load
+        await page.wait_for_timeout(2000)
+
+        # Scroll down progressively to trigger lazy-loaded content
+        try:
+            await page.evaluate("window.scrollTo(0, 400)")
+            await page.wait_for_timeout(800)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+            await page.wait_for_timeout(1000)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.75)")
+            await page.wait_for_timeout(800)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(1000)
+            # Scroll back up so all results are in DOM
+            await page.evaluate("window.scrollTo(0, 0)")
+            await page.wait_for_timeout(500)
+        except Exception:
+            pass  # scrolling is best-effort
 
         # Extract results from DOM
         try:
@@ -1292,16 +1504,52 @@ async def _search_via_dom_scraping(
             return all_leads, f"DOM extraction failed: {exc}"
 
         if not leads:
-            # Check if LinkedIn is showing "No results"
-            no_results = await page.query_selector(
-                'div.search-reusable-search-no-results, '
-                'h2.search-reusable-search-no-results__message'
-            )
-            if no_results:
-                print(f"  [Search-DOM] LinkedIn says 'No results' on page {page_num}")
-                break
-            print(f"  [Search-DOM] No leads extracted from page {page_num}")
-            break
+            # Run diagnostic JS to understand WHY we got 0 results
+            try:
+                diag = await page.evaluate(_DOM_DIAGNOSTIC_JS)
+                print(f"  [Search-DOM] DIAGNOSTIC: url={diag.get('url', '?')[:80]}")
+                print(f"  [Search-DOM] DIAGNOSTIC: title={diag.get('title', '?')}")
+                print(f"  [Search-DOM] DIAGNOSTIC: profileLinks={diag.get('profileLinkCount', 0)}, "
+                      f"listItems={diag.get('mainListItems', 0)}")
+                print(f"  [Search-DOM] DIAGNOSTIC: loginWall={diag.get('hasLoginWall')}, "
+                      f"captcha={diag.get('hasCaptcha')}, noResults={diag.get('noResultsFound')}")
+                if diag.get("sampleLinks"):
+                    for sl in diag["sampleLinks"][:3]:
+                        print(f"    link: href={sl.get('href','')}, text='{sl.get('text','')[:40]}', "
+                              f"parent={sl.get('parentTag','')} .{sl.get('parentClass','')[:40]}")
+                if diag.get("lisWithProfileLinks"):
+                    for li_info in diag["lisWithProfileLinks"][:3]:
+                        print(f"    li: class='{li_info.get('liClass','')[:50]}', "
+                              f"href={li_info.get('linkHref','')[:50]}, textLen={li_info.get('liTextLen',0)}")
+                logger.info("DOM diagnostic: %s", diag)
+
+                # If there ARE profile links but extraction failed, the links
+                # might be in nav/header. Log the preview to debug.
+                if diag.get("profileLinkCount", 0) > 0 and not diag.get("noResultsFound"):
+                    print(f"  [Search-DOM] Profile links exist ({diag['profileLinkCount']}) "
+                          f"but extraction got 0 — may need selector fix")
+                    # Show first 300 chars of main HTML for debugging
+                    preview = diag.get("mainInnerHTMLpreview", "")[:300]
+                    if preview:
+                        print(f"  [Search-DOM] Main HTML preview: {preview}")
+            except Exception as diag_exc:
+                print(f"  [Search-DOM] Diagnostic JS failed: {diag_exc}")
+
+            # Check for no results indicator
+            if not leads:
+                print(f"  [Search-DOM] No leads extracted from page {page_num}")
+                if page_num == 1:
+                    # On first page with no results, try waiting longer once
+                    print(f"  [Search-DOM] Retrying with extra wait...")
+                    await page.wait_for_timeout(5000)
+                    try:
+                        leads = await page.evaluate(_DOM_SCRAPE_JS)
+                    except Exception:
+                        pass
+                    if not leads:
+                        break
+                else:
+                    break
 
         # Extract company from headline for each lead
         for lead in leads:
@@ -1315,8 +1563,8 @@ async def _search_via_dom_scraping(
         if len(all_leads) >= max_results:
             break
 
-        # Delay between pages
-        await page.wait_for_timeout(2000)
+        # Delay between pages (human-like)
+        await page.wait_for_timeout(2500)
 
     return all_leads, None
 
