@@ -1153,40 +1153,39 @@ async def search_people(
 # ---------------------------------------------------------------------------
 
 # JS to extract search results from the rendered LinkedIn search page DOM.
-# Uses a STRUCTURAL approach: find all /in/ profile links, then walk UP the
-# DOM tree to find the containing card and extract text. This is agnostic to
-# LinkedIn's CSS class names which change frequently.
+# Uses data-view-name attributes (LinkedIn's analytics markers) as primary
+# selectors — these are stable even when CSS class names are obfuscated.
 _DOM_SCRAPE_JS = """
 () => {
     const results = [];
     const seenUrls = new Set();
 
-    // ---- Strategy 1: Find ALL profile links on the page ----
-    // This is the most robust approach — /in/ URLs are structural and never change.
-    const allLinks = document.querySelectorAll('a[href*="/in/"]');
+    // ---- Find search result name links ----
+    // PRIMARY: data-view-name attribute (most reliable — LinkedIn analytics marker)
+    let nameLinks = Array.from(
+        document.querySelectorAll('a[data-view-name="search-result-lockup-title"]')
+    );
+    // FALLBACK: all /in/ profile links
+    if (nameLinks.length === 0) {
+        nameLinks = Array.from(document.querySelectorAll('a[href*="/in/"]'));
+    }
 
-    for (const link of allLinks) {
+    for (const link of nameLinks) {
         try {
             const href = link.getAttribute('href') || '';
             const m = href.match(/\\/in\\/([^/?#]+)/);
             if (!m) continue;
             const slug = m[1];
-            // Skip internal/nav links (like own profile in navbar)
             if (slug.length < 2) continue;
             const profileUrl = 'https://www.linkedin.com/in/' + slug;
             if (seenUrls.has(profileUrl)) continue;
 
-            // Walk UP the tree to find the containing card (typically an <li> or a <div>
-            // that acts as the search result container). We look for the closest
-            // list item or a div that has multiple child sections (name, headline, etc.)
-            let card = link.closest('li') || link.closest('[data-chameleon-result-urn]') ||
-                       link.closest('[data-view-name]') || link.closest('div.mb1');
-            // Fallback: walk up until we find a container with enough text
+            // ---- Find the card container ----
+            // Walk up to the nearest <li> (search results are in a list)
+            let card = link.closest('li') || link.closest('[data-chameleon-result-urn]');
             if (!card) {
                 let el = link.parentElement;
                 for (let i = 0; i < 8 && el; i++) {
-                    // A search result card typically has > 30 chars of text
-                    // and is not the entire page
                     if (el.textContent && el.textContent.trim().length > 30 &&
                         el.textContent.trim().length < 2000 &&
                         el.tagName !== 'MAIN' && el.tagName !== 'BODY' &&
@@ -1200,71 +1199,52 @@ _DOM_SCRAPE_JS = """
             if (!card) card = link.parentElement;
 
             // ---- Extract name ----
-            // IMPORTANT: Skip connection degree badges (1st, 2nd, 3rd, 3rd+)
-            // and other non-name text that appears in spans inside the link.
-            const SKIP_PATTERNS = /^(1st|2nd|3rd|3rd\\+|\\d+(st|nd|rd|th)\\+?|·|\\||-|–|—|\\.\\.\\.)$/i;
-            const isNotName = (t) => {
-                if (!t || t.length < 2 || t.length > 60) return true;
-                if (SKIP_PATTERNS.test(t)) return true;
-                if (t === 'LinkedIn Member') return true;
-                if (/^(View|Follow|Connect|Message|Send|InMail|Pending)/i.test(t)) return true;
-                // A real name has at least one letter
-                if (!/[a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF\\u0600-\\u06FF\\u4e00-\\u9fff]/.test(t)) return true;
-                return false;
-            };
-
             let fullName = '';
 
-            // Strategy A: span with aria-hidden="true" near the link (visible text)
+            // Strategy A: span[aria-hidden="true"] inside link (old layout)
             const ariaSpans = link.querySelectorAll('span[aria-hidden="true"]');
             for (const sp of ariaSpans) {
                 const t = sp.textContent.trim();
-                if (!isNotName(t) && !t.includes('\\n')) {
+                if (t && t.length >= 2 && t.length <= 60 &&
+                    /[a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF]/.test(t) &&
+                    !/^(1st|2nd|3rd|View|Follow|Connect)/i.test(t)) {
                     fullName = t;
                     break;
                 }
             }
-            // Strategy B: other spans inside the link
-            if (!fullName) {
-                const spans = link.querySelectorAll('span');
-                for (const sp of spans) {
-                    const t = sp.textContent.trim();
-                    if (!isNotName(t)) {
-                        fullName = t;
-                        break;
-                    }
-                }
-            }
-            // Strategy C: link's own visible text (clean up degree badges)
-            if (!fullName) {
-                let linkText = link.textContent.trim();
-                // Remove degree badges from the text
-                linkText = linkText.replace(/\\b(1st|2nd|3rd|3rd\\+)\\b/gi, '').trim();
-                linkText = linkText.split('\\n')[0].trim();
-                if (!isNotName(linkText)) {
-                    fullName = linkText;
-                }
-            }
-            if (!fullName) continue;
 
-            // ---- Extract headline & location from the card ----
+            // Strategy B: direct link text (new obfuscated layout)
+            if (!fullName) {
+                fullName = link.textContent.trim();
+                fullName = fullName.replace(/\\b(1st|2nd|3rd|3rd\\+)\\b/gi, '').trim();
+                fullName = fullName.split('\\n')[0].trim();
+            }
+
+            if (!fullName || fullName.length < 2 || fullName === 'LinkedIn Member') continue;
+
+            // ---- Extract headline & location ----
             let headline = '';
             let location = '';
 
             if (card) {
-                // STRATEGY 1: Direct CSS class selectors (most reliable)
-                // LinkedIn uses 'entity-result__primary-subtitle' for headline
-                // and 'entity-result__secondary-subtitle' for location.
-                const pSub = card.querySelector('[class*="entity-result__primary-subtitle"]');
-                const sSub = card.querySelector('[class*="entity-result__secondary-subtitle"]');
-                if (pSub) headline = pSub.textContent.trim();
-                if (sSub) location = sSub.textContent.trim();
+                // STRATEGY 1: data-view-name selectors
+                // LinkedIn uses data-view-name with "subtitle" for headline/location.
+                // e.g. "search-result-lockup-subtitle", "search-result-lockup-secondary-subtitle"
+                const subtitleEls = card.querySelectorAll('[data-view-name*="subtitle"]');
+                if (subtitleEls.length >= 1) headline = subtitleEls[0].textContent.trim();
+                if (subtitleEls.length >= 2) location = subtitleEls[1].textContent.trim();
 
-                // STRATEGY 2: Structural navigation from name link.
-                // Walk outward from <a> tag, collecting text from sibling
-                // DIV/P elements (skip inline SPANs that hold badges).
-                // LinkedIn layout: contentArea > nameBlock(link + headlineDiv)
-                //                             > locationDiv > snippetP
+                // STRATEGY 2: CSS class selectors (legacy non-obfuscated layouts)
+                if (!headline && !location) {
+                    const pSub = card.querySelector('[class*="entity-result__primary-subtitle"]');
+                    const sSub = card.querySelector('[class*="entity-result__secondary-subtitle"]');
+                    if (pSub) headline = pSub.textContent.trim();
+                    if (sSub) location = sSub.textContent.trim();
+                }
+
+                // STRATEGY 3: Structural navigation from link outward.
+                // Walk up from <a> tag, at each level collect text from sibling
+                // DIV/P elements (skip inline SPANs that hold badges/dots).
                 if (!headline && !location) {
                     const subtitleTexts = [];
                     let _el = link;
@@ -1290,120 +1270,71 @@ _DOM_SCRAPE_JS = """
                     if (subtitleTexts.length >= 2) location = subtitleTexts[1];
                 }
 
-                // STRATEGY 3: TreeWalker fallback (improved filtering)
+                // STRATEGY 4: TreeWalker fallback (last resort)
                 if (!headline && !location) {
+                    const NOISE = new Set([
+                        'connect', 'follow', 'message', 'send', 'inmail', 'pending',
+                        '1st', '2nd', '3rd', '3rd+', '\\u00b7', '|', '-', '\\u2013',
+                        '\\u2014', '...', '\\u2022', 'view profile', 'send inmail',
+                    ]);
+                    const nameLow = fullName.toLowerCase();
                     const textBlocks = [];
                     const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null);
                     let _n;
                     while (_n = walker.nextNode()) {
                         const t = _n.textContent.trim();
-                        if (t && t.length > 1) textBlocks.push(t);
-                    }
-                    const NOISE = new Set([
-                        'connect', 'follow', 'message', 'send', 'inmail', 'pending',
-                        '1st', '2nd', '3rd', '3rd+', '·', '|', '-', '–', '—', '...', '•',
-                        'view profile', 'view full profile', 'send inmail',
-                    ]);
-                    const nameLower = fullName.toLowerCase();
-                    const nameFirst = fullName.split(' ')[0].toLowerCase();
-                    const nameLast = fullName.split(' ').slice(-1)[0].toLowerCase();
-                    const meaningful = [];
-                    for (const t of textBlocks) {
-                        const tLow = t.toLowerCase().trim();
-                        if (tLow === nameLower) continue;
-                        if (tLow === nameFirst || tLow === nameLast) continue;
-                        if (NOISE.has(tLow)) continue;
-                        if (SKIP_PATTERNS.test(t)) continue;
-                        if (t.length < 3) continue;
-                        if (/^(Connect|Follow|Message|Send|View|Pending|Accept|Decline|Ignore|Save|Dismiss)/i.test(t)) continue;
-                        if (tLow.includes(nameLower) && tLow.length < nameLower.length + 5) continue;
+                        if (!t || t.length < 3) continue;
+                        const tL = t.toLowerCase();
+                        if (tL === nameLow) continue;
+                        if (NOISE.has(tL)) continue;
+                        if (/^(1st|2nd|3rd|3rd\\+|\\d+(st|nd|rd|th)\\+?)$/i.test(t)) continue;
+                        if (/^(Connect|Follow|Message|Send|View|Pending|Save|Dismiss)/i.test(t)) continue;
+                        if (tL.includes(nameLow) && tL.length < nameLow.length + 5) continue;
                         if (/\\d+\\s*(mutual|shared)\\s*(connection|contact)/i.test(t)) continue;
-                        if (/^\\d+(st|nd|rd|th)\\s*degree/i.test(t)) continue;
-                        meaningful.push(t);
+                        textBlocks.push(t);
                     }
-                    for (const t of meaningful) {
-                        if (!headline) { headline = t; }
-                        else if (!location) { location = t; break; }
-                    }
+                    if (textBlocks.length >= 1) headline = textBlocks[0];
+                    if (textBlocks.length >= 2) location = textBlocks[1];
                 }
 
-                // Clean up snippet prefixes that may leak into headline
+                // Clean up snippet prefixes
                 if (headline) {
                     headline = headline.replace(/^(Current|Formerly|Previously):\\s*/i, '').trim();
                 }
 
                 // Sanity check: swap if headline looks like location & vice versa
-                const looksLikeLoc = (s) => {
-                    if (!s) return false;
-                    return (
-                        s.length < 45 &&
-                        (s.includes(',') || /\\b(Area|Region|Metro|Greater|City)\\b/i.test(s)) &&
-                        !/\\b(at|@|CEO|Founder|Manager|Director|Engineer|Analyst|Officer|Lead|Head)\\b/i.test(s)
-                    );
-                };
-                const looksLikeHl = (s) => {
-                    if (!s) return false;
-                    return /\\b(at|@|CEO|Founder|Manager|Director|Engineer|Analyst|Officer|Lead|Head|President|VP|CTO|CFO|COO|Entrepreneur)\\b/i.test(s);
-                };
+                const looksLikeLoc = (s) => s && s.length < 45 &&
+                    (s.includes(',') || /\\b(Area|Region|Metro|Greater|City)\\b/i.test(s)) &&
+                    !/\\b(at|@|CEO|Founder|Manager|Director|Engineer|Officer|Lead|Head)\\b/i.test(s);
+                const looksLikeHl = (s) => s &&
+                    /\\b(at|@|CEO|Founder|Manager|Director|Engineer|Officer|Lead|Head|President|VP|CTO|CFO|COO|Entrepreneur)\\b/i.test(s);
                 if (headline && location && looksLikeLoc(headline) && looksLikeHl(location)) {
                     [headline, location] = [location, headline];
                 }
             }
 
+            // Debug: capture data-view-name values for the first result
+            let _dvn = [];
+            if (results.length === 0 && card) {
+                card.querySelectorAll('[data-view-name]').forEach(el => {
+                    _dvn.push(el.getAttribute('data-view-name') + ' => ' +
+                              (el.textContent || '').trim().substring(0, 60));
+                });
+            }
+
             seenUrls.add(profileUrl);
-            results.push({
+            const entry = {
                 full_name: fullName,
                 first_name: fullName.split(' ')[0] || '',
                 headline: headline,
                 company: '',
                 location: location,
                 profile_url: profileUrl,
-            });
+            };
+            if (_dvn.length > 0) entry._debug_dvn = _dvn;
+            results.push(entry);
         } catch(e) {
             continue;
-        }
-    }
-
-    // ---- Strategy 2: If strategy 1 found nothing, try a broader approach ----
-    // Look for any element with data attributes that suggest search results
-    if (results.length === 0) {
-        const altCards = document.querySelectorAll(
-            '[data-chameleon-result-urn], [data-entity-urn], [data-view-name*="search"]'
-        );
-        for (const card of altCards) {
-            try {
-                const link = card.querySelector('a[href*="/in/"]');
-                if (!link) continue;
-                const href = link.getAttribute('href') || '';
-                const m = href.match(/\\/in\\/([^/?#]+)/);
-                if (!m) continue;
-                const profileUrl = 'https://www.linkedin.com/in/' + m[1];
-                if (seenUrls.has(profileUrl)) continue;
-
-                // Find name, skipping degree badges
-                const degreeRe = /^(1st|2nd|3rd|3rd\\+|\\d+(st|nd|rd|th)\\+?|·|\\|)$/i;
-                let fullName = '';
-                const spans = link.querySelectorAll('span[aria-hidden="true"], span');
-                for (const sp of spans) {
-                    const t = sp.textContent.trim();
-                    if (t && t.length > 1 && !degreeRe.test(t) && /[a-zA-Z]/.test(t)) {
-                        fullName = t;
-                        break;
-                    }
-                }
-                if (!fullName) fullName = link.textContent.trim().replace(/\b(1st|2nd|3rd|3rd\+)\b/gi, '').trim().split('\\n')[0];
-                if (!fullName || fullName === 'LinkedIn Member') continue;
-
-                seenUrls.add(profileUrl);
-                results.push({
-                    full_name: fullName,
-                    first_name: fullName.split(' ')[0] || '',
-                    headline: card.textContent.substring(0, 200).trim(),
-                    company: '',
-                    location: '',
-                    profile_url: profileUrl,
-                });
-            } catch(e) { continue; }
         }
     }
 
@@ -1628,8 +1559,21 @@ async def _search_via_dom_scraping(
                 else:
                     break
 
+        # Log debug data-view-name info from first result (helps diagnose DOM)
+        if leads and leads[0].get("_debug_dvn"):
+            print(f"  [Search-DOM] DEBUG data-view-name attributes in first card:")
+            for dvn_entry in leads[0]["_debug_dvn"]:
+                print(f"    {dvn_entry}")
+            # Also log first result's extracted data for verification
+            first = leads[0]
+            print(f"  [Search-DOM] DEBUG first result: name='{first.get('full_name','')}' "
+                  f"headline='{first.get('headline','')[:60]}' "
+                  f"location='{first.get('location','')[:40]}'")
+
         # Extract company from headline for each lead
         for lead in leads:
+            if "_debug_dvn" in lead:
+                del lead["_debug_dvn"]
             if not lead.get("company"):
                 lead["company"] = _extract_company(lead.get("headline", ""))
 
