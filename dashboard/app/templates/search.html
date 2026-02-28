@@ -2,6 +2,103 @@
 {% block title %}LinkedIn Search — LinkedPilot v2{% endblock %}
 
 {% block content %}
+<style>
+/* --- Multi-select dropdown styles --- */
+.ms-wrap {
+    position: relative;
+}
+.ms-trigger {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    background: var(--pico-background-color);
+    color: var(--pico-color);
+    cursor: pointer;
+    font-size: 0.9rem;
+    min-height: 2.6rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.ms-trigger:hover { border-color: var(--pico-primary); }
+.ms-trigger .ms-placeholder { color: var(--pico-muted-color); }
+.ms-trigger .ms-arrow { font-size: 0.6rem; opacity: 0.6; }
+.ms-tags { display: flex; flex-wrap: wrap; gap: 0.25rem; flex: 1; }
+.ms-tag {
+    background: var(--pico-primary-focus);
+    color: var(--pico-primary);
+    padding: 0.1rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ms-tag-x {
+    cursor: pointer;
+    font-weight: bold;
+    opacity: 0.7;
+}
+.ms-tag-x:hover { opacity: 1; }
+.ms-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 60;
+    background: var(--pico-card-background-color);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0 0 8px 8px;
+    max-height: 280px;
+    overflow-y: auto;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.ms-dropdown.open { display: block; }
+.ms-search {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: none;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    background: transparent;
+    color: var(--pico-color);
+    font-size: 0.85rem;
+    outline: none;
+}
+.ms-option {
+    padding: 0.45rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+}
+.ms-option:hover { background: var(--pico-primary-focus); }
+.ms-option.selected { background: var(--pico-primary-focus); font-weight: 600; }
+.ms-option input[type="checkbox"] { margin: 0; width: 16px; height: 16px; }
+.ms-no-match {
+    padding: 0.6rem 0.75rem;
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    font-style: italic;
+}
+.ms-clear-btn {
+    display: inline-block;
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+    cursor: pointer;
+    margin-left: 0.25rem;
+}
+.ms-clear-btn:hover { color: var(--pico-del-color); }
+</style>
+
 <section>
     <hgroup>
         <h2>LinkedIn Search</h2>
@@ -10,6 +107,7 @@
 
     <!-- Search Form -->
     <form method="post" action="/search/run" id="search-form">
+        <!-- Row 1: Keywords + Location -->
         <div class="grid">
             <label>Search Keywords <small>(required)</small>
                 <input type="text" name="keywords" placeholder="e.g. Software Engineer, CEO Fintech, Product Manager" value="{{ search_query or '' }}" required>
@@ -26,6 +124,7 @@
             </label>
         </div>
 
+        <!-- Row 2: Account + Max Results + Network -->
         <div class="grid">
             <label>Search Using Account
                 <select name="sender_id" required>
@@ -54,18 +153,81 @@
                     <option value="O" {% if search_network == 'O' %}selected{% endif %}>3rd+ Degree</option>
                 </select>
             </label>
-            <label>Company Size
-                <select name="company_size">
-                    <option value="" {% if not search_company_size %}selected{% endif %}>Any Size</option>
-                    <option value="B" {% if search_company_size == 'B' %}selected{% endif %}>1-10 employees</option>
-                    <option value="C" {% if search_company_size == 'C' %}selected{% endif %}>11-50 employees</option>
-                    <option value="D" {% if search_company_size == 'D' %}selected{% endif %}>51-200 employees</option>
-                    <option value="E" {% if search_company_size == 'E' %}selected{% endif %}>201-500 employees</option>
-                    <option value="F" {% if search_company_size == 'F' %}selected{% endif %}>501-1,000 employees</option>
-                    <option value="G" {% if search_company_size == 'G' %}selected{% endif %}>1,001-5,000 employees</option>
-                    <option value="H" {% if search_company_size == 'H' %}selected{% endif %}>5,001-10,000 employees</option>
-                    <option value="I" {% if search_company_size == 'I' %}selected{% endif %}>10,001+ employees</option>
-                </select>
+        </div>
+
+        <!-- Row 3: Company Size + Industry + Service Category -->
+        <div class="grid">
+            <!-- Company Size (multi-select checkboxes) -->
+            <label>Company Size <small>(multi-select)</small>
+                <input type="hidden" name="company_size" id="company-size-hidden" value="{{ search_company_size or '' }}">
+                <div class="ms-wrap" id="ms-company-size" data-target="company-size-hidden">
+                    <div class="ms-trigger" onclick="toggleMultiSelect('ms-company-size')">
+                        <div class="ms-tags" id="ms-company-size-tags">
+                            <span class="ms-placeholder">Any Size</span>
+                        </div>
+                        <span class="ms-arrow">&#9660;</span>
+                    </div>
+                    <div class="ms-dropdown" id="ms-company-size-dd">
+                        <div class="ms-option" data-value="B" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 1-10 employees
+                        </div>
+                        <div class="ms-option" data-value="C" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 11-50 employees
+                        </div>
+                        <div class="ms-option" data-value="D" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 51-200 employees
+                        </div>
+                        <div class="ms-option" data-value="E" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 201-500 employees
+                        </div>
+                        <div class="ms-option" data-value="F" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 501-1,000 employees
+                        </div>
+                        <div class="ms-option" data-value="G" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 1,001-5,000 employees
+                        </div>
+                        <div class="ms-option" data-value="H" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 5,001-10,000 employees
+                        </div>
+                        <div class="ms-option" data-value="I" onclick="toggleMsOption(this)">
+                            <input type="checkbox"> 10,001+ employees
+                        </div>
+                    </div>
+                </div>
+            </label>
+
+            <!-- Industry (searchable multi-select) -->
+            <label>Industry <small>(search & multi-select)</small>
+                <input type="hidden" name="industry" id="industry-hidden" value="{{ search_industry or '' }}">
+                <div class="ms-wrap" id="ms-industry" data-target="industry-hidden">
+                    <div class="ms-trigger" onclick="toggleMultiSelect('ms-industry')">
+                        <div class="ms-tags" id="ms-industry-tags">
+                            <span class="ms-placeholder">All Industries</span>
+                        </div>
+                        <span class="ms-arrow">&#9660;</span>
+                    </div>
+                    <div class="ms-dropdown" id="ms-industry-dd">
+                        <input type="text" class="ms-search" placeholder="Type to search industries..." oninput="filterMsOptions('ms-industry', this.value)">
+                        <div class="ms-options-list" id="ms-industry-list"></div>
+                    </div>
+                </div>
+            </label>
+
+            <!-- Service Category (searchable multi-select) -->
+            <label>Service Category <small>(search & multi-select)</small>
+                <input type="hidden" name="service_category" id="service-category-hidden" value="{{ search_service_category or '' }}">
+                <div class="ms-wrap" id="ms-service-category" data-target="service-category-hidden">
+                    <div class="ms-trigger" onclick="toggleMultiSelect('ms-service-category')">
+                        <div class="ms-tags" id="ms-service-category-tags">
+                            <span class="ms-placeholder">All Services</span>
+                        </div>
+                        <span class="ms-arrow">&#9660;</span>
+                    </div>
+                    <div class="ms-dropdown" id="ms-service-category-dd">
+                        <input type="text" class="ms-search" placeholder="Type to search services..." oninput="filterMsOptions('ms-service-category', this.value)">
+                        <div class="ms-options-list" id="ms-service-category-list"></div>
+                    </div>
+                </div>
             </label>
         </div>
 
@@ -140,14 +302,16 @@
                 <li>Job title: "Senior Software Engineer"</li>
                 <li>Location: Use the Location field for better filtering</li>
                 <li>Company + role: "Data Scientist Flipkart"</li>
-                <li>Industry: "CEO SaaS startup"</li>
+                <li>Industry: Use Industry filter to narrow by sector</li>
                 <li>Max 999 results per search (LinkedIn limit)</li>
             </ul>
             <p><strong>Filters:</strong></p>
             <ul>
                 <li><strong>Location</strong> — Select from dropdown (100+ countries and major cities pre-loaded)</li>
                 <li><strong>Network</strong> — 1st degree (connected), 2nd degree, 3rd+</li>
-                <li><strong>Company Size</strong> — Filter by employer company size</li>
+                <li><strong>Company Size</strong> — Multi-select: pick multiple sizes (e.g. 1-10 + 11-50 + 51-200)</li>
+                <li><strong>Industry</strong> — Search & select industries (e.g. IT, Financial Services, Healthcare)</li>
+                <li><strong>Service Category</strong> — Filter by services offered (e.g. Marketing, Consulting, Design)</li>
             </ul>
         </div>
     </details>
@@ -190,12 +354,421 @@
 // --- Pre-populated Location Data (from server) ---
 var ALL_LOCATIONS = {{ geo_locations | tojson }};
 
-// --- Location Filter/Autocomplete (instant, no API calls) ---
+// =====================================================================
+// INDUSTRY DATA — LinkedIn Industry Codes V1 (used by Voyager search)
+// =====================================================================
+var INDUSTRIES = [
+    {code:"1",name:"Defense & Space"},{code:"3",name:"Computer Hardware"},{code:"4",name:"Computer Software"},
+    {code:"5",name:"Computer Networking"},{code:"6",name:"Internet"},{code:"7",name:"Semiconductors"},
+    {code:"8",name:"Telecommunications"},{code:"9",name:"Law Practice"},{code:"10",name:"Legal Services"},
+    {code:"11",name:"Management Consulting"},{code:"12",name:"Biotechnology"},{code:"13",name:"Medical Practice"},
+    {code:"14",name:"Hospital & Health Care"},{code:"15",name:"Pharmaceuticals"},{code:"16",name:"Veterinary"},
+    {code:"17",name:"Medical Devices"},{code:"18",name:"Cosmetics"},{code:"19",name:"Apparel & Fashion"},
+    {code:"20",name:"Sporting Goods"},{code:"21",name:"Tobacco"},{code:"22",name:"Supermarkets"},
+    {code:"23",name:"Food Production"},{code:"24",name:"Consumer Electronics"},{code:"25",name:"Consumer Goods"},
+    {code:"26",name:"Furniture"},{code:"27",name:"Retail"},{code:"28",name:"Entertainment"},
+    {code:"29",name:"Gambling & Casinos"},{code:"30",name:"Leisure, Travel & Tourism"},{code:"31",name:"Hospitality"},
+    {code:"32",name:"Restaurants"},{code:"33",name:"Sports"},{code:"34",name:"Food & Beverages"},
+    {code:"35",name:"Motion Pictures and Film"},{code:"36",name:"Broadcast Media"},{code:"37",name:"Museums and Institutions"},
+    {code:"38",name:"Fine Art"},{code:"39",name:"Performing Arts"},{code:"40",name:"Recreational Facilities and Services"},
+    {code:"41",name:"Banking"},{code:"42",name:"Insurance"},{code:"43",name:"Financial Services"},
+    {code:"44",name:"Real Estate"},{code:"45",name:"Investment Banking"},{code:"46",name:"Investment Management"},
+    {code:"47",name:"Accounting"},{code:"48",name:"Construction"},{code:"49",name:"Building Materials"},
+    {code:"50",name:"Architecture & Planning"},{code:"51",name:"Civil Engineering"},{code:"52",name:"Aviation & Aerospace"},
+    {code:"53",name:"Automotive"},{code:"54",name:"Chemicals"},{code:"55",name:"Machinery"},
+    {code:"56",name:"Mining & Metals"},{code:"57",name:"Oil & Energy"},{code:"58",name:"Shipbuilding"},
+    {code:"59",name:"Utilities"},{code:"60",name:"Textiles"},{code:"61",name:"Paper & Forest Products"},
+    {code:"62",name:"Railroad Manufacture"},{code:"63",name:"Farming"},{code:"64",name:"Ranching"},
+    {code:"65",name:"Dairy"},{code:"66",name:"Fishery"},{code:"67",name:"Primary/Secondary Education"},
+    {code:"68",name:"Higher Education"},{code:"69",name:"Education Management"},{code:"70",name:"Research"},
+    {code:"71",name:"Military"},{code:"72",name:"Legislative Office"},{code:"73",name:"Judiciary"},
+    {code:"74",name:"International Affairs"},{code:"75",name:"Government Administration"},{code:"76",name:"Executive Office"},
+    {code:"77",name:"Law Enforcement"},{code:"78",name:"Public Safety"},{code:"79",name:"Public Policy"},
+    {code:"80",name:"Marketing and Advertising"},{code:"81",name:"Newspapers"},{code:"82",name:"Publishing"},
+    {code:"83",name:"Printing"},{code:"84",name:"Information Services"},{code:"85",name:"Libraries"},
+    {code:"86",name:"Environmental Services"},{code:"87",name:"Package/Freight Delivery"},
+    {code:"88",name:"Individual & Family Services"},{code:"89",name:"Religious Institutions"},
+    {code:"90",name:"Civic & Social Organization"},{code:"91",name:"Consumer Services"},
+    {code:"92",name:"Transportation/Trucking/Railroad"},{code:"93",name:"Warehousing"},
+    {code:"94",name:"Airlines/Aviation"},{code:"95",name:"Maritime"},
+    {code:"96",name:"Information Technology and Services"},{code:"97",name:"Market Research"},
+    {code:"98",name:"Public Relations and Communications"},{code:"99",name:"Design"},
+    {code:"100",name:"Non-Profit Organization Management"},{code:"101",name:"Fund-Raising"},
+    {code:"102",name:"Program Development"},{code:"103",name:"Writing and Editing"},
+    {code:"104",name:"Staffing and Recruiting"},{code:"105",name:"Professional Training & Coaching"},
+    {code:"106",name:"Venture Capital & Private Equity"},{code:"107",name:"Political Organization"},
+    {code:"108",name:"Translation and Localization"},{code:"109",name:"Computer Games"},
+    {code:"110",name:"Events Services"},{code:"111",name:"Arts and Crafts"},
+    {code:"112",name:"Electrical/Electronic Manufacturing"},{code:"113",name:"Online Media"},
+    {code:"114",name:"Nanotechnology"},{code:"115",name:"Music"},{code:"116",name:"Logistics and Supply Chain"},
+    {code:"117",name:"Plastics"},{code:"118",name:"Computer & Network Security"},
+    {code:"119",name:"Wireless"},{code:"120",name:"Alternative Dispute Resolution"},
+    {code:"121",name:"Security and Investigations"},{code:"122",name:"Facilities Services"},
+    {code:"123",name:"Outsourcing/Offshoring"},{code:"124",name:"Health, Wellness and Fitness"},
+    {code:"125",name:"Alternative Medicine"},{code:"126",name:"Media Production"},
+    {code:"127",name:"Animation"},{code:"128",name:"Commercial Real Estate"},
+    {code:"129",name:"Capital Markets"},{code:"130",name:"Think Tanks"},
+    {code:"131",name:"Philanthropy"},{code:"132",name:"E-Learning"},
+    {code:"133",name:"Wholesale"},{code:"134",name:"Import and Export"},
+    {code:"135",name:"Mechanical or Industrial Engineering"},{code:"136",name:"Photography"},
+    {code:"137",name:"Human Resources"},{code:"138",name:"Business Supplies and Equipment"},
+    {code:"139",name:"Mental Health Care"},{code:"140",name:"Graphic Design"},
+    {code:"141",name:"International Trade and Development"},{code:"142",name:"Wine and Spirits"},
+    {code:"143",name:"Luxury Goods & Jewelry"},{code:"144",name:"Renewables & Environment"},
+    {code:"145",name:"Glass, Ceramics & Concrete"},{code:"146",name:"Packaging and Containers"},
+    {code:"147",name:"Industrial Automation"},{code:"148",name:"Government Relations"}
+];
+
+// =====================================================================
+// SERVICE CATEGORIES — LinkedIn Service Categories
+// =====================================================================
+var SERVICE_CATEGORIES = [
+    {code:"urn:li:service:accounting",name:"Accounting"},
+    {code:"urn:li:service:administrativeSupport",name:"Administrative Support"},
+    {code:"urn:li:service:advertising",name:"Advertising"},
+    {code:"urn:li:service:animationDesign",name:"Animation Design"},
+    {code:"urn:li:service:applicationDevelopment",name:"Application Development"},
+    {code:"urn:li:service:audioEngineering",name:"Audio Engineering"},
+    {code:"urn:li:service:bankingConsulting",name:"Banking & Finance"},
+    {code:"urn:li:service:blogWriting",name:"Blog Writing"},
+    {code:"urn:li:service:bookkeeping",name:"Bookkeeping"},
+    {code:"urn:li:service:brandConsulting",name:"Brand Consulting"},
+    {code:"urn:li:service:brandMarketing",name:"Brand Marketing"},
+    {code:"urn:li:service:businessAnalytics",name:"Business Analytics"},
+    {code:"urn:li:service:businessConsulting",name:"Business Consulting"},
+    {code:"urn:li:service:businessLaw",name:"Business Law"},
+    {code:"urn:li:service:careerDevelopmentCoaching",name:"Career Development Coaching"},
+    {code:"urn:li:service:changeManagement",name:"Change Management"},
+    {code:"urn:li:service:civilLaw",name:"Civil Law"},
+    {code:"urn:li:service:commercialInsurance",name:"Commercial Insurance"},
+    {code:"urn:li:service:commercialRealEstate",name:"Commercial Real Estate"},
+    {code:"urn:li:service:contentMarketing",name:"Content Marketing"},
+    {code:"urn:li:service:contentStrategy",name:"Content Strategy"},
+    {code:"urn:li:service:copywriting",name:"Copywriting"},
+    {code:"urn:li:service:corporateEvents",name:"Corporate Events"},
+    {code:"urn:li:service:corporateLaw",name:"Corporate Law"},
+    {code:"urn:li:service:corporateTraining",name:"Corporate Training"},
+    {code:"urn:li:service:customerService",name:"Customer Service"},
+    {code:"urn:li:service:customerSupport",name:"Customer Support"},
+    {code:"urn:li:service:cybersecurity",name:"Cybersecurity"},
+    {code:"urn:li:service:dataAnalytics",name:"Data Analytics"},
+    {code:"urn:li:service:dataEntry",name:"Data Entry"},
+    {code:"urn:li:service:demandGeneration",name:"Demand Generation"},
+    {code:"urn:li:service:design3d",name:"3D Design"},
+    {code:"urn:li:service:digitalMarketing",name:"Digital Marketing"},
+    {code:"urn:li:service:diversityAndInclusion",name:"Diversity & Inclusion"},
+    {code:"urn:li:service:djing",name:"DJing"},
+    {code:"urn:li:service:duiLaw",name:"DUI Law"},
+    {code:"urn:li:service:editing",name:"Editing"},
+    {code:"urn:li:service:educationalConsulting",name:"Educational Consulting"},
+    {code:"urn:li:service:emailMarketing",name:"Email Marketing"},
+    {code:"urn:li:service:employeeBenefitsConsulting",name:"Employee Benefits Consulting"},
+    {code:"urn:li:service:environmentalConsulting",name:"Environmental Consulting"},
+    {code:"urn:li:service:estatePlanning",name:"Estate Planning"},
+    {code:"urn:li:service:eventPhotography",name:"Event Photography"},
+    {code:"urn:li:service:eventPlanning",name:"Event Planning"},
+    {code:"urn:li:service:executiveCoaching",name:"Executive Coaching"},
+    {code:"urn:li:service:familyLaw",name:"Family Law"},
+    {code:"urn:li:service:fileManagement",name:"File Management"},
+    {code:"urn:li:service:filing",name:"Filing"},
+    {code:"urn:li:service:financialAccounting",name:"Financial Accounting"},
+    {code:"urn:li:service:financialAdvisory",name:"Financial Advisory"},
+    {code:"urn:li:service:financialAnalysis",name:"Financial Analysis"},
+    {code:"urn:li:service:financialConsulting",name:"Financial Consulting"},
+    {code:"urn:li:service:financialForecasting",name:"Financial Forecasting"},
+    {code:"urn:li:service:financialPlanning",name:"Financial Planning"},
+    {code:"urn:li:service:financialReporting",name:"Financial Reporting"},
+    {code:"urn:li:service:ghostwriting",name:"Ghostwriting"},
+    {code:"urn:li:service:grantWriting",name:"Grant Writing"},
+    {code:"urn:li:service:graphicDesign",name:"Graphic Design"},
+    {code:"urn:li:service:growthMarketing",name:"Growth Marketing"},
+    {code:"urn:li:service:healthInsurance",name:"Health Insurance"},
+    {code:"urn:li:service:healthcareConsulting",name:"Healthcare Consulting"},
+    {code:"urn:li:service:homeInspection",name:"Home Inspection"},
+    {code:"urn:li:service:homeNetworking",name:"Home Networking"},
+    {code:"urn:li:service:homeownersInsurance",name:"Homeowners Insurance"},
+    {code:"urn:li:service:hrConsulting",name:"HR Consulting"},
+    {code:"urn:li:service:humanResources",name:"Human Resources"},
+    {code:"urn:li:service:illustration",name:"Illustration"},
+    {code:"urn:li:service:immigrationLaw",name:"Immigration Law"},
+    {code:"urn:li:service:informationManagement",name:"Information Management"},
+    {code:"urn:li:service:informationSecurity",name:"Information Security"},
+    {code:"urn:li:service:insuranceConsulting",name:"Insurance Consulting"},
+    {code:"urn:li:service:intellectualPropertyLaw",name:"Intellectual Property Law"},
+    {code:"urn:li:service:interactionDesign",name:"Interaction Design"},
+    {code:"urn:li:service:interiorDesign",name:"Interior Design"},
+    {code:"urn:li:service:interviewPreparation",name:"Interview Preparation"},
+    {code:"urn:li:service:investmentManagement",name:"Investment Management"},
+    {code:"urn:li:service:iosDevelopment",name:"iOS Development"},
+    {code:"urn:li:service:itConsulting",name:"IT Consulting"},
+    {code:"urn:li:service:laborAndEmploymentLaw",name:"Labor & Employment Law"},
+    {code:"urn:li:service:leadGeneration",name:"Lead Generation"},
+    {code:"urn:li:service:leadershipDevelopment",name:"Leadership Development"},
+    {code:"urn:li:service:legalConsulting",name:"Legal Consulting"},
+    {code:"urn:li:service:lifeCoaching",name:"Life Coaching"},
+    {code:"urn:li:service:lifeInsurance",name:"Life Insurance"},
+    {code:"urn:li:service:logoDesign",name:"Logo Design"},
+    {code:"urn:li:service:managementConsulting",name:"Management Consulting"},
+    {code:"urn:li:service:marketResearch",name:"Market Research"},
+    {code:"urn:li:service:marketingConsulting",name:"Marketing Consulting"},
+    {code:"urn:li:service:marketingStrategy",name:"Marketing Strategy"},
+    {code:"urn:li:service:mortgageLending",name:"Mortgage Lending"},
+    {code:"urn:li:service:negotiation",name:"Negotiation"},
+    {code:"urn:li:service:nonprofitConsulting",name:"Nonprofit Consulting"},
+    {code:"urn:li:service:operationsManagement",name:"Operations Management"},
+    {code:"urn:li:service:outsourcing",name:"Outsourcing"},
+    {code:"urn:li:service:payroll",name:"Payroll"},
+    {code:"urn:li:service:personalInsurance",name:"Personal Insurance"},
+    {code:"urn:li:service:personalTaxPlanning",name:"Personal Tax Planning"},
+    {code:"urn:li:service:politicalConsulting",name:"Political Consulting"},
+    {code:"urn:li:service:portraitPhotography",name:"Portrait Photography"},
+    {code:"urn:li:service:pricingStrategy",name:"Pricing Strategy"},
+    {code:"urn:li:service:printDesign",name:"Print Design"},
+    {code:"urn:li:service:productMarketing",name:"Product Marketing"},
+    {code:"urn:li:service:programManagement",name:"Program Management"},
+    {code:"urn:li:service:projectManagement",name:"Project Management"},
+    {code:"urn:li:service:propertyManagement",name:"Property Management"},
+    {code:"urn:li:service:publicRelations",name:"Public Relations"},
+    {code:"urn:li:service:publicSpeaking",name:"Public Speaking"},
+    {code:"urn:li:service:realEstateAppraisal",name:"Real Estate Appraisal"},
+    {code:"urn:li:service:relocationConsulting",name:"Relocation Consulting"},
+    {code:"urn:li:service:residentialRealEstate",name:"Residential Real Estate"},
+    {code:"urn:li:service:resumeReview",name:"Resume Review"},
+    {code:"urn:li:service:resumeWriting",name:"Resume Writing"},
+    {code:"urn:li:service:retirementPlanning",name:"Retirement Planning"},
+    {code:"urn:li:service:searchEngineMarketing",name:"Search Engine Marketing (SEM)"},
+    {code:"urn:li:service:searchEngineOptimization",name:"Search Engine Optimization (SEO)"},
+    {code:"urn:li:service:smallBusinessInsurance",name:"Small Business Insurance"},
+    {code:"urn:li:service:smallBusinessTax",name:"Small Business Tax"},
+    {code:"urn:li:service:socialMediaMarketing",name:"Social Media Marketing"},
+    {code:"urn:li:service:softwareDevelopment",name:"Software Development"},
+    {code:"urn:li:service:supplyChainManagement",name:"Supply Chain Management"},
+    {code:"urn:li:service:taxAdvisory",name:"Tax Advisory"},
+    {code:"urn:li:service:taxPreparation",name:"Tax Preparation"},
+    {code:"urn:li:service:teamBuilding",name:"Team Building"},
+    {code:"urn:li:service:technicalWriting",name:"Technical Writing"},
+    {code:"urn:li:service:training",name:"Training"},
+    {code:"urn:li:service:uxDesign",name:"UX Design"},
+    {code:"urn:li:service:uxResearch",name:"UX Research"},
+    {code:"urn:li:service:videoEditing",name:"Video Editing"},
+    {code:"urn:li:service:videoProduction",name:"Video Production"},
+    {code:"urn:li:service:virtualAssistance",name:"Virtual Assistance"},
+    {code:"urn:li:service:webDesign",name:"Web Design"},
+    {code:"urn:li:service:webDevelopment",name:"Web Development"},
+    {code:"urn:li:service:weddingPhotography",name:"Wedding Photography"},
+    {code:"urn:li:service:wordpressDesign",name:"WordPress Design"},
+    {code:"urn:li:service:wealthManagement",name:"Wealth Management"}
+];
+
+// =====================================================================
+// MULTI-SELECT DROPDOWN ENGINE
+// =====================================================================
+function initMultiSelect(wrapId, items, placeholderText) {
+    var wrap = document.getElementById(wrapId);
+    var listEl = document.getElementById(wrapId + '-list');
+    if (!listEl) return; // company-size has static options
+
+    // Populate options
+    items.forEach(function(item) {
+        var div = document.createElement('div');
+        div.className = 'ms-option';
+        div.setAttribute('data-value', item.code);
+        div.setAttribute('data-label', item.name);
+        div.onclick = function() { toggleMsOption(this); };
+        div.innerHTML = '<input type="checkbox"> ' + item.name;
+        listEl.appendChild(div);
+    });
+}
+
+function toggleMultiSelect(wrapId) {
+    var dd = document.getElementById(wrapId + '-dd');
+    var isOpen = dd.classList.contains('open');
+
+    // Close all other dropdowns first
+    document.querySelectorAll('.ms-dropdown.open').forEach(function(d) {
+        d.classList.remove('open');
+    });
+
+    if (!isOpen) {
+        dd.classList.add('open');
+        var search = dd.querySelector('.ms-search');
+        if (search) {
+            search.value = '';
+            search.focus();
+            filterMsOptions(wrapId, '');
+        }
+    }
+}
+
+function toggleMsOption(optionEl) {
+    var cb = optionEl.querySelector('input[type="checkbox"]');
+    cb.checked = !cb.checked;
+    optionEl.classList.toggle('selected', cb.checked);
+
+    // Find parent wrap
+    var wrap = optionEl.closest('.ms-wrap');
+    updateMsHidden(wrap);
+    updateMsTags(wrap);
+}
+
+function updateMsHidden(wrap) {
+    var targetId = wrap.getAttribute('data-target');
+    var hidden = document.getElementById(targetId);
+    var selected = wrap.querySelectorAll('.ms-option.selected');
+    var values = [];
+    selected.forEach(function(opt) { values.push(opt.getAttribute('data-value')); });
+    hidden.value = values.join(',');
+}
+
+function updateMsTags(wrap) {
+    var wrapId = wrap.id;
+    var tagsEl = document.getElementById(wrapId + '-tags');
+    var selected = wrap.querySelectorAll('.ms-option.selected');
+
+    tagsEl.innerHTML = '';
+
+    if (selected.length === 0) {
+        var placeholder = wrap.querySelector('.ms-trigger .ms-placeholder');
+        // Restore placeholder
+        var ph = document.createElement('span');
+        ph.className = 'ms-placeholder';
+        if (wrapId === 'ms-company-size') ph.textContent = 'Any Size';
+        else if (wrapId === 'ms-industry') ph.textContent = 'All Industries';
+        else ph.textContent = 'All Services';
+        tagsEl.appendChild(ph);
+        return;
+    }
+
+    selected.forEach(function(opt) {
+        var label = opt.getAttribute('data-label') || opt.textContent.trim();
+        var val = opt.getAttribute('data-value');
+        var tag = document.createElement('span');
+        tag.className = 'ms-tag';
+        tag.innerHTML = label + ' <span class="ms-tag-x" onclick="event.stopPropagation(); removeMsTag(\'' + wrapId + '\',\'' + val + '\')">&times;</span>';
+        tagsEl.appendChild(tag);
+    });
+
+    // Add clear-all if more than 1
+    if (selected.length > 1) {
+        var clearBtn = document.createElement('span');
+        clearBtn.className = 'ms-clear-btn';
+        clearBtn.textContent = 'Clear all';
+        clearBtn.onclick = function(e) {
+            e.stopPropagation();
+            clearAllMs(wrapId);
+        };
+        tagsEl.appendChild(clearBtn);
+    }
+}
+
+function removeMsTag(wrapId, value) {
+    var wrap = document.getElementById(wrapId);
+    var opt = wrap.querySelector('.ms-option[data-value="' + value + '"]');
+    if (opt) {
+        opt.classList.remove('selected');
+        var cb = opt.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = false;
+    }
+    updateMsHidden(wrap);
+    updateMsTags(wrap);
+}
+
+function clearAllMs(wrapId) {
+    var wrap = document.getElementById(wrapId);
+    wrap.querySelectorAll('.ms-option.selected').forEach(function(opt) {
+        opt.classList.remove('selected');
+        var cb = opt.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = false;
+    });
+    updateMsHidden(wrap);
+    updateMsTags(wrap);
+}
+
+function filterMsOptions(wrapId, query) {
+    var wrap = document.getElementById(wrapId);
+    var options = wrap.querySelectorAll('.ms-option');
+    var q = (query || '').toLowerCase();
+    var visibleCount = 0;
+
+    options.forEach(function(opt) {
+        var label = (opt.getAttribute('data-label') || opt.textContent).toLowerCase();
+        if (!q || label.indexOf(q) !== -1) {
+            opt.style.display = '';
+            visibleCount++;
+        } else {
+            opt.style.display = 'none';
+        }
+    });
+
+    // Show/hide no-match message
+    var listEl = wrap.querySelector('.ms-options-list') || wrap.querySelector('.ms-dropdown');
+    var noMatch = listEl.querySelector('.ms-no-match');
+    if (visibleCount === 0) {
+        if (!noMatch) {
+            noMatch = document.createElement('div');
+            noMatch.className = 'ms-no-match';
+            noMatch.textContent = 'No matching options';
+            listEl.appendChild(noMatch);
+        }
+        noMatch.style.display = '';
+    } else if (noMatch) {
+        noMatch.style.display = 'none';
+    }
+}
+
+// Close dropdowns on outside click
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.ms-wrap')) {
+        document.querySelectorAll('.ms-dropdown.open').forEach(function(d) {
+            d.classList.remove('open');
+        });
+    }
+});
+
+// =====================================================================
+// INIT: Populate dynamic multi-selects + restore saved values
+// =====================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    // Populate industry & service category dropdowns
+    initMultiSelect('ms-industry', INDUSTRIES, 'All Industries');
+    initMultiSelect('ms-service-category', SERVICE_CATEGORIES, 'All Services');
+
+    // Set data-label on static company-size options
+    document.querySelectorAll('#ms-company-size .ms-option').forEach(function(opt) {
+        opt.setAttribute('data-label', opt.textContent.trim());
+    });
+
+    // Restore saved values from hidden inputs
+    restoreMsValues('ms-company-size');
+    restoreMsValues('ms-industry');
+    restoreMsValues('ms-service-category');
+});
+
+function restoreMsValues(wrapId) {
+    var wrap = document.getElementById(wrapId);
+    var targetId = wrap.getAttribute('data-target');
+    var hidden = document.getElementById(targetId);
+    if (!hidden || !hidden.value) return;
+
+    var values = hidden.value.split(',').filter(function(v) { return v.trim(); });
+    values.forEach(function(val) {
+        var opt = wrap.querySelector('.ms-option[data-value="' + val.trim() + '"]');
+        if (opt) {
+            opt.classList.add('selected');
+            var cb = opt.querySelector('input[type="checkbox"]');
+            if (cb) cb.checked = true;
+        }
+    });
+    updateMsTags(wrap);
+}
+
+// =====================================================================
+// LOCATION FILTER (unchanged)
+// =====================================================================
 function filterLocations(query) {
     var dropdown = document.getElementById('geo-dropdown');
 
     if (!query || query.length < 1) {
-        // Show all locations when focused with empty input
         _renderGeoDropdown(ALL_LOCATIONS.slice(0, 20));
         return;
     }
@@ -213,7 +786,6 @@ function _renderGeoDropdown(results) {
     dropdown.innerHTML = '';
 
     if (!results || results.length === 0) {
-        // Show "no match" message
         var msg = document.createElement('div');
         msg.textContent = 'No matching location found';
         msg.style.cssText = 'padding:0.6rem 0.8rem; font-size:0.85rem; color:var(--pico-muted-color); font-style:italic;';
@@ -240,7 +812,7 @@ function _renderGeoDropdown(results) {
     dropdown.style.display = 'block';
 }
 
-// Close dropdown on outside click
+// Close geo dropdown on outside click
 document.addEventListener('click', function(e) {
     var dropdown = document.getElementById('geo-dropdown');
     var input = document.getElementById('location-input');
@@ -249,13 +821,11 @@ document.addEventListener('click', function(e) {
     }
 });
 
-// Clear geoUrn if user manually edits the text after selecting
 document.getElementById('location-input').addEventListener('input', function() {
     document.getElementById('geo-urn-input').value = '';
     document.getElementById('location-text').value = this.value;
 });
 
-// Clear location button (optional: click the X or clear the field)
 document.getElementById('location-input').addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         this.value = '';
@@ -265,7 +835,9 @@ document.getElementById('location-input').addEventListener('keydown', function(e
     }
 });
 
-// Show loading state when searching
+// =====================================================================
+// FORM + RESULTS (unchanged)
+// =====================================================================
 document.getElementById('search-form').addEventListener('submit', function() {
     var btn = document.getElementById('search-btn');
     btn.setAttribute('aria-busy', 'true');
@@ -273,7 +845,6 @@ document.getElementById('search-form').addEventListener('submit', function() {
     btn.disabled = true;
 });
 
-// Reset spinner on page load (after form POST returns with results)
 window.addEventListener('load', function() {
     var btn = document.getElementById('search-btn');
     if (btn) {

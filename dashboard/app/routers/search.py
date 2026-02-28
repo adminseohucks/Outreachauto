@@ -58,6 +58,8 @@ def _build_template_context(request, senders, lists, **extra):
         "search_location": "",
         "search_network": "",
         "search_company_size": "",
+        "search_industry": "",
+        "search_service_category": "",
         "total_results": 0,
         "active_page": "search",
         "geo_locations": _GEO_LOCATIONS,
@@ -103,6 +105,8 @@ async def run_search(
     geo_urn: str = Form(""),
     network: str = Form(""),
     company_size: str = Form(""),
+    industry: str = Form(""),
+    service_category: str = Form(""),
 ):
     """Execute a LinkedIn people search using the sender's browser."""
     global _last_search_results
@@ -116,6 +120,8 @@ async def run_search(
         "search_location": location,
         "search_network": network,
         "search_company_size": company_size,
+        "search_industry": industry,
+        "search_service_category": service_category,
     }
 
     # Validate sender has browser open
@@ -134,9 +140,20 @@ async def run_search(
     if network:
         network_filter = [network]
 
+    # Company size supports multiple comma-separated values
     company_size_filter = None
     if company_size:
-        company_size_filter = [company_size]
+        company_size_filter = [s.strip() for s in company_size.split(",") if s.strip()]
+
+    # Industry supports multiple comma-separated values
+    industry_filter = None
+    if industry:
+        industry_filter = [s.strip() for s in industry.split(",") if s.strip()]
+
+    # Service category supports multiple comma-separated values
+    service_category_filter = None
+    if service_category:
+        service_category_filter = [s.strip() for s in service_category.split(",") if s.strip()]
 
     try:
         page = await browser_manager.get_page(sender_id)
@@ -148,6 +165,8 @@ async def run_search(
             geo_urn=geo_urn,
             network=network_filter,
             company_size=company_size_filter,
+            industry=industry_filter,
+            service_category=service_category_filter,
         )
     except Exception as exc:
         logger.error("Search failed: %s", exc)

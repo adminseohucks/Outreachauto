@@ -711,6 +711,8 @@ def _build_filters_list(
     geo_urn: str | None = None,
     network: list[str] | None = None,
     company_size: list[str] | None = None,
+    industry: list[str] | None = None,
+    service_category: list[str] | None = None,
 ) -> str:
     """Build the LinkedIn queryParameters filter string.
 
@@ -726,6 +728,12 @@ def _build_filters_list(
     if company_size:
         values = " | ".join(company_size)
         filters.append(f"(key:companySize,value:List({values}))")
+    if industry:
+        values = " | ".join(industry)
+        filters.append(f"(key:industry,value:List({values}))")
+    if service_category:
+        values = " | ".join(service_category)
+        filters.append(f"(key:serviceCategory,value:List({values}))")
     return ",".join(filters)
 
 
@@ -975,6 +983,8 @@ async def search_people(
     geo_urn: str = "",
     network: list[str] | None = None,
     company_size: list[str] | None = None,
+    industry: list[str] | None = None,
+    service_category: list[str] | None = None,
 ) -> tuple[list[dict], str | None]:
     """
     Search LinkedIn for people matching keywords and filters.
@@ -990,6 +1000,8 @@ async def search_people(
     geo_urn : Pre-resolved LinkedIn geoUrn (from autocomplete)
     network : Connection degree filter ["F"=1st, "S"=2nd, "O"=3rd+]
     company_size : Company size codes ["B"=1-10 .. "I"=10001+]
+    industry : Industry codes ["96"=IT, "4"=Software, etc.]
+    service_category : Service category codes
 
     Returns
     -------
@@ -1029,6 +1041,8 @@ async def search_people(
         geo_urn=geo_urn,
         network=network,
         company_size=company_size,
+        industry=industry,
+        service_category=service_category,
     )
 
     # Try to extract queryId from LinkedIn JS (no navigation, instant)
