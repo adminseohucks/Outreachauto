@@ -1,0 +1,495 @@
+{% extends "base.html" %}
+{% block title %}Leads — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<section>
+    <hgroup>
+        <h2>Leads <small>({{ total }} total)</small></h2>
+        <p>All your leads across all lists. Add manually, upload CSV, or import from search results.</p>
+    </hgroup>
+
+    <!-- Filter bar -->
+    <form method="get" action="/leads" class="filter-bar">
+        <div class="filter-group">
+            <label for="filter-search">Search</label>
+            <input type="text" id="filter-search" name="search" placeholder="Name, company, URL..." value="{{ filters.search or '' }}">
+        </div>
+        <div class="filter-group">
+            <label for="filter-title">Title</label>
+            <input type="text" id="filter-title" name="title" placeholder="e.g. Engineer" value="{{ filters.title or '' }}">
+        </div>
+        <div class="filter-group">
+            <label for="filter-company">Company</label>
+            <input type="text" id="filter-company" name="company" placeholder="e.g. Infosys" value="{{ filters.company or '' }}">
+        </div>
+        <div class="filter-group">
+            <label for="filter-location">Location</label>
+            <input type="text" id="filter-location" name="location" placeholder="e.g. Bengaluru" value="{{ filters.location or '' }}">
+        </div>
+        <div class="filter-group">
+            <label for="filter-list">List</label>
+            <select id="filter-list" name="list_id">
+                <option value="0">All Lists</option>
+                {% for lst in lists %}
+                <option value="{{ lst.id }}" {% if filters.list_id == lst.id %}selected{% endif %}>{{ lst.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="filter-source">Source</label>
+            <select id="filter-source" name="source">
+                <option value="">All Sources</option>
+                {% for src in sources|default([]) %}
+                <option value="{{ src }}" {% if filters.source == src %}selected{% endif %}>{{ src }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="filter-status">Status</label>
+            <select id="filter-status" name="status">
+                <option value="">All Statuses</option>
+                {% for st in statuses|default([]) %}
+                <option value="{{ st }}" {% if filters.status == st %}selected{% endif %}>{{ st }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-group" style="flex-direction: row; gap: 0.5rem;">
+            <button type="submit">Filter</button>
+            <a href="/leads" role="button" class="secondary outline">Clear</a>
+        </div>
+    </form>
+
+    <!-- ======= BULK TOOLBAR ======= -->
+    <div class="bulk-toolbar" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; padding: 0.75rem 1rem; border: 1px solid var(--pico-muted-border-color); border-radius: 8px; background: var(--pico-card-background-color);">
+        <button onclick="openModal('add-lead-modal')" style="font-size: 0.85rem;">+ Add Lead</button>
+        <button class="secondary" onclick="openModal('upload-csv-modal')" style="font-size: 0.85rem;">Upload CSV</button>
+        <span style="border-left: 1px solid var(--pico-muted-border-color); height: 1.5rem;"></span>
+        <button class="outline" onclick="selectAll()" style="font-size: 0.85rem;" type="button">Select All</button>
+        <button class="outline secondary" onclick="deselectAll()" style="font-size: 0.85rem;" type="button">Deselect All</button>
+        <span style="border-left: 1px solid var(--pico-muted-border-color); height: 1.5rem;"></span>
+        <button class="outline secondary" id="btn-add-to-list" onclick="addToList()" disabled style="font-size: 0.85rem;">Add to List</button>
+        <button class="outline" id="btn-delete" style="color: var(--lp-red, #e53e3e); border-color: var(--lp-red, #e53e3e); font-size: 0.85rem;" onclick="deleteSelected()" disabled>Delete Selected (<span id="sel-count">0</span>)</button>
+        <button class="outline" id="btn-delete-all" style="color: var(--lp-red, #e53e3e); border-color: var(--lp-red, #e53e3e); font-size: 0.85rem;" onclick="deleteAllFiltered()">Delete All Filtered ({{ total }})</button>
+        <span style="border-left: 1px solid var(--pico-muted-border-color); height: 1.5rem;"></span>
+        <form method="post" action="/leads/export-csv" style="display: inline; margin: 0;">
+            <input type="hidden" name="search" value="{{ filters.search or '' }}">
+            <input type="hidden" name="company" value="{{ filters.company or '' }}">
+            <input type="hidden" name="location" value="{{ filters.location or '' }}">
+            <input type="hidden" name="title" value="{{ filters.title or '' }}">
+            <input type="hidden" name="list_id" value="{{ filters.list_id or 0 }}">
+            <button type="submit" class="outline" style="font-size: 0.85rem;">Export CSV</button>
+        </form>
+    </div>
+
+    <!-- Hidden form for delete-all-filtered -->
+    <form method="post" action="/leads/delete-filtered" id="delete-filtered-form" style="display: none;">
+        <input type="hidden" name="search" value="{{ filters.search or '' }}">
+        <input type="hidden" name="company" value="{{ filters.company or '' }}">
+        <input type="hidden" name="location" value="{{ filters.location or '' }}">
+        <input type="hidden" name="title" value="{{ filters.title or '' }}">
+        <input type="hidden" name="list_id" value="{{ filters.list_id or 0 }}">
+        <input type="hidden" name="source" value="{{ filters.source or '' }}">
+        <input type="hidden" name="status" value="{{ filters.status or '' }}">
+    </form>
+
+    <!-- Leads table -->
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="master-cb" onchange="toggleSelectAll(this)"></th>
+                <th>Name</th>
+                <th>Title</th>
+                <th>Company</th>
+                <th>Location</th>
+                <th>List</th>
+                <th>Source</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for lead in leads %}
+            <tr>
+                <td><input type="checkbox" class="lead-cb" value="{{ lead.id }}" data-source="{{ lead.source or '' }}" data-status="{{ lead.status or 'new' }}" onchange="updateBulkButtons()"></td>
+                <td>
+                    {% if lead.profile_url %}
+                    <a href="{{ lead.profile_url }}" target="_blank" rel="noopener">{{ lead.full_name }}</a>
+                    {% else %}
+                    {{ lead.full_name }}
+                    {% endif %}
+                </td>
+                <td>{{ lead.headline or '' }}</td>
+                <td>{{ lead.company or '' }}</td>
+                <td>{{ lead.location or '' }}</td>
+                <td>
+                    {% if lead.list_name %}
+                    <span class="badge badge-active" style="font-size: 0.7rem;">{{ lead.list_name }}</span>
+                    {% else %}
+                    --
+                    {% endif %}
+                </td>
+                <td><span class="badge badge-{{ lead.source or 'pending' }}" style="font-size: 0.65rem;">{{ lead.source or 'unknown' }}</span></td>
+                <td>
+                    {% set st = lead.status or 'new' %}
+                    <span class="badge badge-status-{{ st }}" style="font-size: 0.65rem;">{{ st }}</span>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="8" style="text-align: center; padding: 2rem;">
+                    <strong>No leads found.</strong><br>
+                    <small>Add leads manually, upload a CSV, or search LinkedIn.</small>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Pagination -->
+    {% if pages > 1 %}
+    {% set fq = 'search=' ~ (filters.search or '') ~ '&company=' ~ (filters.company or '') ~ '&location=' ~ (filters.location or '') ~ '&title=' ~ (filters.title or '') ~ '&list_id=' ~ (filters.list_id or 0) ~ '&source=' ~ (filters.source or '') ~ '&status=' ~ (filters.status or '') %}
+    <nav class="pagination">
+        {% if page > 1 %}
+        <a href="/leads?page={{ page - 1 }}&{{ fq }}">Previous</a>
+        {% endif %}
+        {% for p in range(1, pages + 1) %}
+            {% if p == page %}
+            <a href="#" class="current">{{ p }}</a>
+            {% elif p <= 3 or p > pages - 2 or (p >= page - 1 and p <= page + 1) %}
+            <a href="/leads?page={{ p }}&{{ fq }}">{{ p }}</a>
+            {% elif p == 4 and page > 5 %}
+            <span>...</span>
+            {% elif p == pages - 2 and page < pages - 4 %}
+            <span>...</span>
+            {% endif %}
+        {% endfor %}
+        {% if page < pages %}
+        <a href="/leads?page={{ page + 1 }}&{{ fq }}">Next</a>
+        {% endif %}
+    </nav>
+    {% endif %}
+</section>
+
+<!-- ============ ADD LEAD MODAL ============ -->
+<div class="modal-overlay" id="add-lead-modal">
+    <div class="modal-content">
+        <header>
+            <h3>Add Lead Manually</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('add-lead-modal')" type="button">&times;</button>
+        </header>
+        <form method="post" action="/leads/add-manual">
+            <label>Full Name <small>(required)</small>
+                <input type="text" name="full_name" placeholder="e.g. Rahul Sharma" required>
+            </label>
+            <label>LinkedIn Profile URL <small>(required)</small>
+                <input type="url" name="profile_url" placeholder="https://linkedin.com/in/rahul-sharma" required>
+            </label>
+            <label>First Name
+                <input type="text" name="first_name" placeholder="Rahul">
+            </label>
+            <div class="grid">
+                <label>Title / Headline
+                    <input type="text" name="headline" placeholder="e.g. Senior Engineer at TCS">
+                </label>
+                <label>Company
+                    <input type="text" name="company" placeholder="e.g. TCS">
+                </label>
+            </div>
+            <label>Location
+                <input type="text" name="location" placeholder="e.g. Bengaluru, India">
+            </label>
+            <hr>
+            <label>Add to List
+                <select name="list_name">
+                    <option value="">-- Select existing list --</option>
+                    {% for lst in lists %}
+                    <option value="{{ lst.name }}">{{ lst.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Or create new list
+                <input type="text" name="new_list_name" placeholder="e.g. My Outreach List">
+            </label>
+            <small style="display: block; margin-bottom: 1rem;">If both are empty, lead goes to "Manual Leads" list.</small>
+            <fieldset class="grid">
+                <button type="submit">Add Lead</button>
+                <button type="button" class="secondary" onclick="closeModal('add-lead-modal')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+
+<!-- ============ UPLOAD CSV MODAL ============ -->
+<div class="modal-overlay" id="upload-csv-modal">
+    <div class="modal-content" style="max-width: 620px;">
+        <header>
+            <h3 id="csv-modal-title">Upload CSV</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="csvUploadReset()" type="button">&times;</button>
+        </header>
+
+        <!-- Step 1: File + List selection -->
+        <div id="csv-step-1">
+            <label>Select CSV File
+                <input type="file" id="csv-file" accept=".csv" onchange="csvFileSelected(this)">
+            </label>
+            <label>Add to existing list
+                <select id="csv-list-name">
+                    <option value="">-- Select existing list --</option>
+                    {% for lst in lists %}
+                    <option value="{{ lst.name }}">{{ lst.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Or create new list
+                <input type="text" id="csv-new-list-name" placeholder="e.g. Q1 Outreach Leads">
+            </label>
+            <small>If both are empty, a new list will be auto-created with the current date.</small>
+        </div>
+
+        <!-- Step 2: Header matching -->
+        <div id="csv-step-2" style="display: none;">
+            <p style="margin-bottom: 0.5rem;"><strong id="csv-file-info"></strong></p>
+            <small style="display: block; margin-bottom: 1rem;">Match your CSV columns to database fields. <span style="color: var(--lp-accent, #e53e3e);">profile_url is required.</span></small>
+            <table class="data-table" style="font-size: 0.85rem;">
+                <thead>
+                    <tr>
+                        <th>Your CSV Column</th>
+                        <th>Map To Field</th>
+                    </tr>
+                </thead>
+                <tbody id="csv-mapping-body"></tbody>
+            </table>
+            <div id="csv-mapping-error" style="color: var(--lp-red, #e53e3e); font-size: 0.85rem; margin-top: 0.5rem; display: none;"></div>
+            <footer style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
+                <button type="button" class="secondary outline" onclick="csvUploadReset()">Cancel</button>
+                <button type="button" id="csv-upload-btn" onclick="csvSubmitMapped()">Upload & Import</button>
+            </footer>
+        </div>
+
+        <!-- Step 3: Result -->
+        <div id="csv-step-3" style="display: none; text-align: center; padding: 1rem 0;">
+            <p id="csv-progress-msg" aria-busy="true">Uploading and importing leads...</p>
+        </div>
+    </div>
+</div>
+
+<!-- ============ ADD TO LIST MODAL ============ -->
+<div class="modal-overlay" id="add-to-list-modal">
+    <div class="modal-content" style="max-width: 420px;">
+        <header>
+            <h3>Add to List</h3>
+            <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('add-to-list-modal')" type="button">&times;</button>
+        </header>
+        <form method="post" action="/leads/add-to-list" id="add-to-list-form">
+            <input type="hidden" name="lead_ids" id="atl-lead-ids" value="">
+            <p id="atl-count" style="font-size: 0.9rem; margin-bottom: 1rem;"></p>
+            <label>Existing List
+                <select name="list_name">
+                    <option value="">-- Select list --</option>
+                    {% for lst in lists %}
+                    <option value="{{ lst.name }}">{{ lst.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Or create new list
+                <input type="text" name="new_list_name" placeholder="e.g. Hot Leads Q1">
+            </label>
+            <fieldset class="grid">
+                <button type="submit">Add to List</button>
+                <button type="button" class="secondary" onclick="closeModal('add-to-list-modal')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// --- Checkbox & Bulk Actions ---
+function toggleSelectAll(master) {
+    document.querySelectorAll('.lead-cb').forEach(cb => cb.checked = master.checked);
+    updateBulkButtons();
+}
+
+function selectAll() {
+    document.querySelectorAll('.lead-cb').forEach(cb => cb.checked = true);
+    var m = document.getElementById('master-cb');
+    if (m) m.checked = true;
+    updateBulkButtons();
+}
+
+function deselectAll() {
+    document.querySelectorAll('.lead-cb').forEach(cb => cb.checked = false);
+    var m = document.getElementById('master-cb');
+    if (m) m.checked = false;
+    updateBulkButtons();
+}
+
+function getSelectedIds() {
+    return Array.from(document.querySelectorAll('.lead-cb:checked')).map(cb => cb.value);
+}
+
+function updateBulkButtons() {
+    const count = getSelectedIds().length;
+    document.getElementById('btn-add-to-list').disabled = count === 0;
+    document.getElementById('btn-delete').disabled = count === 0;
+    document.getElementById('sel-count').textContent = count;
+}
+
+function addToList() {
+    const ids = getSelectedIds();
+    if (!ids.length) return;
+    document.getElementById('atl-lead-ids').value = ids.join(',');
+    document.getElementById('atl-count').textContent = ids.length + ' lead(s) selected';
+    openModal('add-to-list-modal');
+}
+
+function deleteSelected() {
+    const ids = getSelectedIds();
+    if (!ids.length) return;
+    if (!confirm('Delete ' + ids.length + ' lead(s)? This cannot be undone.')) return;
+
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/leads/delete';
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'lead_ids';
+    input.value = ids.join(',');
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
+}
+
+function deleteAllFiltered() {
+    var total = {{ total }};
+    if (!total) { alert('No leads match the current filters.'); return; }
+    var msg = 'Delete ALL ' + total + ' lead(s) matching the current filters? This cannot be undone.';
+    if (!confirm(msg)) return;
+    document.getElementById('delete-filtered-form').submit();
+}
+
+// --- CSV Upload ---
+let csvFileData = null;
+let csvHeaders = [];
+
+function csvFileSelected(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    csvFileData = file;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const text = e.target.result;
+        const firstLine = text.split('\n')[0].trim();
+        csvHeaders = firstLine.split(',').map(h => h.replace(/"/g, '').trim());
+
+        // Count rows
+        const rows = text.split('\n').filter(l => l.trim()).length - 1;
+        document.getElementById('csv-file-info').textContent = file.name + ' — ' + rows + ' rows, ' + csvHeaders.length + ' columns';
+
+        // Build mapping table
+        const dbFields = ['', 'profile_url', 'full_name', 'first_name', 'headline', 'company', 'location'];
+        const fieldLabels = {'': '-- Skip --', 'profile_url': 'Profile URL (required)', 'full_name': 'Full Name', 'first_name': 'First Name', 'headline': 'Title / Headline', 'company': 'Company', 'location': 'Location'};
+
+        const tbody = document.getElementById('csv-mapping-body');
+        tbody.innerHTML = '';
+        csvHeaders.forEach(function(h) {
+            const tr = document.createElement('tr');
+
+            const td1 = document.createElement('td');
+            td1.textContent = h;
+            tr.appendChild(td1);
+
+            const td2 = document.createElement('td');
+            const sel = document.createElement('select');
+            sel.className = 'csv-field-map';
+            sel.setAttribute('data-csv-col', h);
+            dbFields.forEach(function(f) {
+                const opt = document.createElement('option');
+                opt.value = f;
+                opt.textContent = fieldLabels[f];
+                // Auto-match common column names
+                const hLower = h.toLowerCase().replace(/[^a-z]/g, '');
+                if (f === 'profile_url' && (hLower.includes('linkedin') || hLower.includes('profileurl') || hLower.includes('url'))) opt.selected = true;
+                else if (f === 'full_name' && (hLower === 'name' || hLower === 'fullname')) opt.selected = true;
+                else if (f === 'first_name' && (hLower === 'firstname' || hLower === 'first')) opt.selected = true;
+                else if (f === 'headline' && (hLower.includes('title') || hLower.includes('headline'))) opt.selected = true;
+                else if (f === 'company' && (hLower.includes('company') || hLower.includes('organization'))) opt.selected = true;
+                else if (f === 'location' && hLower.includes('location')) opt.selected = true;
+                sel.appendChild(opt);
+            });
+            td2.appendChild(sel);
+            tr.appendChild(td2);
+
+            tbody.appendChild(tr);
+        });
+
+        document.getElementById('csv-step-1').style.display = 'none';
+        document.getElementById('csv-step-2').style.display = 'block';
+    };
+    reader.readAsText(file);
+}
+
+function csvSubmitMapped() {
+    // Build column mapping
+    const mapping = {};
+    let hasUrl = false;
+    document.querySelectorAll('.csv-field-map').forEach(function(sel) {
+        const csvCol = sel.getAttribute('data-csv-col');
+        const dbField = sel.value;
+        if (dbField) {
+            mapping[csvCol] = dbField;
+            if (dbField === 'profile_url') hasUrl = true;
+        }
+    });
+
+    if (!hasUrl) {
+        document.getElementById('csv-mapping-error').textContent = 'You must map at least one column to "Profile URL".';
+        document.getElementById('csv-mapping-error').style.display = 'block';
+        return;
+    }
+
+    document.getElementById('csv-step-2').style.display = 'none';
+    document.getElementById('csv-step-3').style.display = 'block';
+    document.getElementById('csv-progress-msg').setAttribute('aria-busy', 'true');
+    document.getElementById('csv-progress-msg').textContent = 'Uploading and importing leads...';
+
+    const formData = new FormData();
+    formData.append('file', csvFileData);
+    formData.append('list_name', document.getElementById('csv-list-name').value);
+    formData.append('new_list_name', document.getElementById('csv-new-list-name').value);
+    formData.append('column_mapping', JSON.stringify(mapping));
+
+    fetch('/leads/upload-csv', { method: 'POST', body: formData })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('csv-progress-msg').removeAttribute('aria-busy');
+        if (data.success) {
+            document.getElementById('csv-progress-msg').innerHTML =
+                '<strong>Import complete!</strong><br>' +
+                'Imported: ' + data.imported + ' | Skipped: ' + data.skipped +
+                '<br>List: ' + data.list_name +
+                (data.errors.length ? '<br><small style="color:var(--lp-red);">' + data.errors.slice(0, 5).join('<br>') + '</small>' : '') +
+                '<br><br><a href="/leads" role="button">Refresh</a>';
+        } else {
+            document.getElementById('csv-progress-msg').innerHTML = '<strong style="color:var(--lp-red);">Upload failed.</strong>';
+        }
+    })
+    .catch(() => {
+        document.getElementById('csv-progress-msg').removeAttribute('aria-busy');
+        document.getElementById('csv-progress-msg').innerHTML = '<strong style="color:var(--lp-red);">Network error.</strong>';
+    });
+}
+
+function csvUploadReset() {
+    document.getElementById('csv-step-1').style.display = 'block';
+    document.getElementById('csv-step-2').style.display = 'none';
+    document.getElementById('csv-step-3').style.display = 'none';
+    document.getElementById('csv-file').value = '';
+    document.getElementById('csv-mapping-error').style.display = 'none';
+    csvFileData = null;
+    csvHeaders = [];
+    closeModal('upload-csv-modal');
+}
+</script>
+{% endblock %}

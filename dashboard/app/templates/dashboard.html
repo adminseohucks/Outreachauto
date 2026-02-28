@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<section>
+    <h2>Dashboard</h2>
+
+    <!-- Stat cards with HTMX live polling -->
+    <div id="live-stats" class="stat-grid" hx-get="/api/stats" hx-trigger="every 30s" hx-swap="none">
+        <div class="stat-card green">
+            <span class="stat-value" id="stat-total">{{ stats.total if stats else lead_stats.total if lead_stats else 0 }}</span>
+            <span class="stat-label">Total Leads</span>
+        </div>
+        <div class="stat-card blue">
+            <span class="stat-value" id="stat-senders">{{ active_senders|length if active_senders is defined else active_senders_count|default(0) }}</span>
+            <span class="stat-label">Active Senders</span>
+        </div>
+        <div class="stat-card green">
+            <span class="stat-value" id="stat-likes">{{ stats.likes_today if stats else likes_today|default(0) }}</span>
+            <span class="stat-label">Likes Today</span>
+        </div>
+        <div class="stat-card orange">
+            <span class="stat-value" id="stat-comments">{{ stats.comments_today if stats else comments_today|default(0) }}</span>
+            <span class="stat-label">Comments Today</span>
+        </div>
+        <div class="stat-card blue">
+            <span class="stat-value" id="stat-campaigns">{{ active_campaigns|length if active_campaigns is iterable and active_campaigns is not string else active_campaigns|default(0) }}</span>
+            <span class="stat-label">Active Campaigns</span>
+        </div>
+    </div>
+
+    <small id="stat-timestamp">Updated: just now</small>
+</section>
+
+<!-- Sender Status -->
+<section>
+    <h3>Sender Status</h3>
+    <div class="sender-grid">
+        {% for sender in senders|default(sender_cards|default([])) %}
+        <article class="sender-card">
+            <div class="sender-name">{{ sender.name }}</div>
+            <div class="sender-email">{{ sender.linkedin_email|default(sender.email|default('')) }}</div>
+            <div style="margin-top: 0.4rem;">
+                <span class="badge badge-{{ sender.status }}">{{ sender.status }}</span>
+            </div>
+            <div class="sender-stats">
+                {% set likes_left = (sender.daily_like_limit|default(100)) - (sender.likes_today|default(0)) %}
+                {% set comments_left = (sender.daily_comment_limit|default(50)) - (sender.comments_today|default(0)) %}
+                {% set connects_left = (sender.daily_connect_limit|default(25)) - (sender.connects_today|default(0)) %}
+                <span>Likes: {{ sender.likes_today|default(0) }} / {{ sender.daily_like_limit|default(100) }} <small style="color: var(--lp-gray);">({{ likes_left }} left)</small></span>
+                <span>Comments: {{ sender.comments_today|default(0) }} / {{ sender.daily_comment_limit|default(50) }} <small style="color: var(--lp-gray);">({{ comments_left }} left)</small></span>
+                <span>Connects: {{ sender.connects_today|default(0) }} / {{ sender.daily_connect_limit|default(25) }} <small style="color: var(--lp-gray);">({{ connects_left }} left)</small></span>
+            </div>
+            <div style="margin-top: 0.4rem; font-size: 0.85rem;">
+                Running campaigns: {{ sender.running_campaigns|default(0) }}
+            </div>
+        </article>
+        {% else %}
+        <p>No senders configured. <a href="/senders">Add a sender</a>.</p>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Recent Activity -->
+<section>
+    <h3>Recent Activity</h3>
+    <div class="activity-feed">
+        <div id="activity-list">
+            {% for activity in activities[:15] %}
+            <div class="activity-item">
+                <span class="time">{{ activity.created_at.split('T')[1][:8] if activity.created_at and 'T' in activity.created_at else activity.created_at|default('') }}</span>
+                <span class="sender">{{ activity.sender_name|default('') }}</span>
+                <span class="badge badge-{{ activity.status|default('pending') }}">{{ activity.status|default('pending') }}</span>
+                <span class="action">{{ activity.action_type|default('') }}: {{ activity.details|default('') }}{% if activity.lead_name %} - {{ activity.lead_name }}{% endif %}</span>
+            </div>
+            {% else %}
+            <p style="padding: 1rem; text-align: center; color: var(--lp-gray);">No recent activity.</p>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}

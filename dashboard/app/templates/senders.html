@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+{% block title %}Senders — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<hgroup>
+    <h2>LinkedIn Accounts <small>({{ senders|length }}/4)</small></h2>
+    <p>Add up to 4 LinkedIn accounts. Each gets its own browser — log in once, cookies are saved.</p>
+</hgroup>
+
+<!-- Quick Actions -->
+<div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+    {% if senders|length < 4 %}
+    <button onclick="openModal('add-sender-modal')">+ Add Account</button>
+    {% endif %}
+    {% if senders|length > 0 %}
+    <form method="post" action="/senders/login-all" style="margin:0;">
+        <button type="submit" class="secondary">Open All Browsers</button>
+    </form>
+    <form method="post" action="/senders/close-all" style="margin:0;">
+        <button type="submit" class="outline secondary">Close All Browsers</button>
+    </form>
+    {% endif %}
+</div>
+
+<!-- Sender cards -->
+{% if senders %}
+<div class="sender-grid" style="margin-top: 1rem;">
+    {% for s in senders %}
+    <article class="sender-card" id="sender-{{ s.id }}">
+        <!-- Header: Name + Status -->
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <div class="sender-name">{{ s.name }}</div>
+                <div class="sender-email">{{ s.linkedin_email or '' }}</div>
+            </div>
+            <span class="badge badge-{{ s.status }}">{{ s.status }}</span>
+        </div>
+
+        {% if s.profile_url %}
+        <div style="margin-top: 0.25rem;">
+            <a href="{{ s.profile_url }}" target="_blank" rel="noopener" style="font-size: 0.85rem;">View LinkedIn Profile</a>
+        </div>
+        {% endif %}
+
+        <!-- Today's Stats -->
+        <div class="sender-stats" style="margin-top: 0.5rem;">
+            <span>Likes: {{ s.likes_today or 0 }}/{{ s.daily_like_limit or 100 }}</span>
+            <span>Comments: {{ s.comments_today or 0 }}/{{ s.daily_comment_limit or 50 }}</span>
+            <span>Connects: {{ s.connects_today or 0 }}/{{ s.daily_connect_limit or 25 }}</span>
+        </div>
+
+        <!-- Error display (shown once) -->
+        {% if s.error %}
+        <div style="margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: #fee2e2; border-radius: 6px; font-size: 0.8rem; color: #dc2626; border-left: 3px solid #dc2626;">
+            <strong>Error:</strong> {{ s.error }}
+        </div>
+        {% endif %}
+
+        <!-- LinkedIn Login Section -->
+        <div style="margin-top: 0.75rem; padding: 0.75rem; background: {% if s.browser_open %}#dbeafe{% else %}#f3f4f6{% endif %}; border-radius: 8px;">
+            {% if s.browser_open %}
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <span style="color: #22c55e; font-weight: bold;">&#9679;</span>
+                    <strong style="font-size: 0.9rem;">Browser is open</strong>
+                </div>
+                <p style="font-size: 0.8rem; margin-bottom: 0.5rem; color: #374151;">
+                    Log into LinkedIn in the Chrome window. When done, click Verify.
+                </p>
+                <div class="action-buttons">
+                    <button type="button" class="outline" style="font-size: 0.75rem;" onclick="checkLogin({{ s.id }})">Verify Login</button>
+                    <form method="post" action="/senders/{{ s.id }}/close-browser" style="margin:0;">
+                        <button type="submit" class="outline secondary" style="font-size: 0.75rem;">Close Browser</button>
+                    </form>
+                </div>
+            {% else %}
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <span style="color: #f59e0b; font-weight: bold;">&#9679;</span>
+                    <strong style="font-size: 0.9rem;">Not connected</strong>
+                </div>
+                <p style="font-size: 0.8rem; margin-bottom: 0.5rem; color: #374151;">
+                    Click below to open Chrome and log into this LinkedIn account.
+                </p>
+                <form method="post" action="/senders/{{ s.id }}/login" style="margin:0;">
+                    <button type="submit" style="font-size: 0.85rem; padding: 0.4rem 1rem;">Open Chrome & Login</button>
+                </form>
+            {% endif %}
+            <div id="login-status-{{ s.id }}" style="font-size: 0.8rem; margin-top: 0.4rem;"></div>
+        </div>
+
+        <!-- Extension Chrome Section -->
+        <div style="margin-top: 0.75rem; padding: 0.75rem; background: {% if s.extension_chrome_open %}#fef3c7{% else %}#f3f4f6{% endif %}; border-radius: 8px;">
+            {% if s.extension_chrome_open %}
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <span style="color: #22c55e; font-weight: bold;">&#9679;</span>
+                    <strong style="font-size: 0.9rem;">Extension Chrome is open</strong>
+                </div>
+                <p style="font-size: 0.8rem; margin-bottom: 0.5rem; color: #374151;">
+                    Install the commenting extension in this Chrome and log into LinkedIn. Use this Chrome for commenting.
+                </p>
+                <form method="post" action="/senders/{{ s.id }}/close-extension-chrome" style="margin:0;">
+                    <button type="submit" class="outline secondary" style="font-size: 0.75rem;">Close Extension Chrome</button>
+                </form>
+            {% else %}
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <span style="font-weight: bold; font-size: 0.9rem;">&#128295;</span>
+                    <strong style="font-size: 0.9rem;">Extension Chrome</strong>
+                </div>
+                <p style="font-size: 0.8rem; margin-bottom: 0.5rem; color: #374151;">
+                    Opens a separate Chrome (not automated) for the commenting extension. Your normal Chrome stays untouched.
+                </p>
+                <form method="post" action="/senders/{{ s.id }}/open-extension-chrome" style="margin:0;">
+                    <button type="submit" class="outline" style="font-size: 0.85rem; padding: 0.4rem 1rem;">Open Chrome for Extension</button>
+                </form>
+            {% endif %}
+        </div>
+
+        <!-- Company Pages Section -->
+        <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--pico-card-sectioning-background-color, #f8f9fa); border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <strong style="font-size: 0.85rem;">Company Pages</strong>
+                <button type="button" class="outline" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;" onclick="openModal('add-page-modal-{{ s.id }}')">+ Add Page</button>
+            </div>
+            {% if s.company_pages %}
+                {% for pg in s.company_pages %}
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; font-size: 0.8rem; border-bottom: 1px solid rgba(0,0,0,0.05);">
+                    <div>
+                        <a href="{{ pg.page_url }}" target="_blank" rel="noopener" style="font-weight: 600;">{{ pg.page_name }}</a>
+                        {% if not pg.is_active %}<span class="badge badge-paused" style="font-size: 0.65rem; margin-left: 0.3rem;">inactive</span>{% endif %}
+                    </div>
+                    <div style="display: flex; gap: 0.3rem;">
+                        <form method="post" action="/senders/{{ s.id }}/pages/{{ pg.id }}/toggle" style="margin:0;">
+                            <button type="submit" class="outline" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">{{ 'Disable' if pg.is_active else 'Enable' }}</button>
+                        </form>
+                        <form method="post" action="/senders/{{ s.id }}/pages/{{ pg.id }}/remove" style="margin:0;" onsubmit="return confirm('Remove this page?')">
+                            <button type="submit" class="outline" style="font-size: 0.65rem; padding: 0.15rem 0.4rem; color: var(--lp-red); border-color: var(--lp-red);">Remove</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <small style="color: var(--lp-gray);">No company pages added. Add pages to like/comment as your company.</small>
+            {% endif %}
+        </div>
+
+        <!-- Add Company Page Modal (per sender) -->
+        <div class="modal-overlay" id="add-page-modal-{{ s.id }}">
+            <div class="modal-content" style="max-width: 420px;">
+                <header>
+                    <h3>Add Company Page</h3>
+                    <button class="outline secondary" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="closeModal('add-page-modal-{{ s.id }}')" type="button">&times;</button>
+                </header>
+                <form method="post" action="/senders/{{ s.id }}/pages/add">
+                    <label>
+                        Page Name
+                        <input type="text" name="page_name" placeholder="e.g. TechCorp Solutions" required>
+                    </label>
+                    <label>
+                        LinkedIn Company Page URL
+                        <input type="url" name="page_url" placeholder="https://www.linkedin.com/company/techcorp" required>
+                    </label>
+                    <small style="display: block; margin-bottom: 1rem;">You must be an admin of this page on LinkedIn for likes/comments to work as the page.</small>
+                    <fieldset class="grid">
+                        <button type="submit">Add Page</button>
+                        <button type="button" class="secondary" onclick="closeModal('add-page-modal-{{ s.id }}')">Cancel</button>
+                    </fieldset>
+                </form>
+            </div>
+        </div>
+
+        <!-- Management buttons -->
+        <div class="action-buttons" style="margin-top: 0.75rem;">
+            <button class="outline" style="font-size: 0.8rem;" onclick="openEditModal({{ s.id }}, {{ s|tojson }})">Edit</button>
+            {% if s.status == 'active' %}
+            <form method="post" action="/senders/{{ s.id }}/toggle" style="margin:0;">
+                <button type="submit" class="outline secondary" style="font-size: 0.8rem;">Pause</button>
+            </form>
+            {% elif s.status == 'paused' %}
+            <form method="post" action="/senders/{{ s.id }}/toggle" style="margin:0;">
+                <button type="submit" class="outline" style="font-size: 0.8rem;">Activate</button>
+            </form>
+            {% endif %}
+            {% if s.status != 'disabled' %}
+            <form method="post" action="/senders/{{ s.id }}/disable" style="margin:0;" onsubmit="return confirm('Disable this sender?')">
+                <button type="submit" class="outline" style="font-size: 0.8rem; color: var(--lp-red); border-color: var(--lp-red);">Disable</button>
+            </form>
+            {% endif %}
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<article style="margin-top: 1rem; text-align: center; padding: 2rem;">
+    <h3>No LinkedIn accounts added yet</h3>
+    <p>Add your LinkedIn accounts to start liking and commenting on posts.</p>
+    <button onclick="openModal('add-sender-modal')" style="margin-top: 1rem;">+ Add First Account</button>
+</article>
+{% endif %}
+
+<!-- How it works -->
+<details style="margin-top: 2rem;">
+    <summary><strong>How does login work?</strong></summary>
+    <div style="padding: 1rem; font-size: 0.9rem;">
+        <ol>
+            <li><strong>Add account</strong> -- Enter the name and LinkedIn email</li>
+            <li><strong>Click "Open Chrome & Login"</strong> -- A separate Chrome window opens (for likes/connects automation)</li>
+            <li><strong>Log into LinkedIn</strong> -- Enter your email + password in that Chrome window</li>
+            <li><strong>Complete any verification</strong> -- 2FA, captcha, phone verification etc.</li>
+            <li><strong>Click "Verify Login"</strong> back here -- Confirms the session is active</li>
+            <li><strong>Done!</strong> -- Cookies are saved. You won't need to log in again unless LinkedIn forces it.</li>
+        </ol>
+        <p style="margin-top: 0.5rem;"><strong>Note:</strong> Your password is NEVER stored anywhere. Each account gets a completely isolated Chrome profile.</p>
+    </div>
+</details>
+
+<details style="margin-top: 1rem;">
+    <summary><strong>What is "Extension Chrome"?</strong></summary>
+    <div style="padding: 1rem; font-size: 0.9rem;">
+        <p>Each sender has <strong>two separate Chrome browsers</strong>:</p>
+        <ol>
+            <li><strong>Automation Chrome</strong> (Open Chrome & Login) -- Used by the system for likes and connect requests. This is a Playwright-controlled browser.</li>
+            <li><strong>Extension Chrome</strong> (Open Chrome for Extension) -- A normal Chrome with a separate profile for the commenting extension. No automation flags, no "controlled by software" banner.</li>
+        </ol>
+        <p><strong>First time setup for Extension Chrome:</strong></p>
+        <ol>
+            <li>Click "Open Chrome for Extension" -- a fresh Chrome opens</li>
+            <li>Install the commenting extension (load unpacked from extensions folder)</li>
+            <li>Log into LinkedIn with this sender's account</li>
+            <li>Done! Next time you open it, the extension and login will still be there.</li>
+        </ol>
+        <p><strong>Your normal Chrome stays completely untouched.</strong></p>
+    </div>
+</details>
+
+<!-- Add Sender Modal (simplified) -->
+<div class="modal-overlay" id="add-sender-modal">
+    <div class="modal-content">
+        <hgroup>
+            <h3>Add LinkedIn Account</h3>
+            <p>Enter the account details. You'll log in after adding.</p>
+        </hgroup>
+        <form method="post" action="/senders/add">
+            <label>
+                Account Name <small>(for your reference)</small>
+                <input type="text" name="name" placeholder="e.g. Rahul - Sales Account" required>
+            </label>
+            <label>
+                LinkedIn Email
+                <input type="email" name="linkedin_email" placeholder="rahul@company.com" required>
+            </label>
+            <label>
+                LinkedIn Profile URL <small>(optional)</small>
+                <input type="url" name="profile_url" placeholder="https://linkedin.com/in/rahul-sharma">
+            </label>
+            <!-- Browser profile auto-generated -->
+            <input type="hidden" name="browser_profile" value="data/browser_profiles/sender_{{ senders|length + 1 }}">
+            <fieldset class="grid">
+                <button type="submit">Add Account</button>
+                <button type="button" class="secondary" onclick="closeModal('add-sender-modal')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Sender Modal -->
+<div class="modal-overlay" id="edit-sender-modal">
+    <div class="modal-content">
+        <hgroup>
+            <h3>Edit Account</h3>
+            <p>Update account details and limits</p>
+        </hgroup>
+        <form method="post" id="edit-sender-form" action="">
+            <label>
+                Account Name
+                <input type="text" name="name" id="edit-name" required>
+            </label>
+            <label>
+                LinkedIn Email
+                <input type="email" name="linkedin_email" id="edit-email" required>
+            </label>
+            <label>
+                LinkedIn Profile URL
+                <input type="url" name="profile_url" id="edit-url">
+            </label>
+            <input type="hidden" name="browser_profile" id="edit-browser">
+            <hr>
+            <h4>Daily / Weekly Limits</h4>
+            <div class="grid">
+                <label>
+                    Daily Likes
+                    <input type="number" name="daily_like_limit" id="edit-dl" value="100" min="0" max="500">
+                </label>
+                <label>
+                    Daily Comments
+                    <input type="number" name="daily_comment_limit" id="edit-dc" value="50" min="0" max="200">
+                </label>
+            </div>
+            <div class="grid">
+                <label>
+                    Daily Connects
+                    <input type="number" name="daily_connect_limit" id="edit-dcn" value="25" min="0" max="100">
+                </label>
+                <label>
+                    Weekly Connects
+                    <input type="number" name="weekly_connect_limit" id="edit-wcn" value="100" min="0" max="500">
+                </label>
+            </div>
+            <div class="grid">
+                <label>
+                    Weekly Likes
+                    <input type="number" name="weekly_like_limit" id="edit-wl" value="300" min="0" max="2000">
+                </label>
+                <label>
+                    Weekly Comments
+                    <input type="number" name="weekly_comment_limit" id="edit-wc" value="200" min="0" max="1000">
+                </label>
+            </div>
+            <fieldset class="grid">
+                <button type="submit">Save Changes</button>
+                <button type="button" class="secondary" onclick="closeModal('edit-sender-modal')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openEditModal(senderId, sender) {
+    document.getElementById('edit-sender-form').action = '/senders/' + senderId + '/edit';
+    document.getElementById('edit-name').value = sender.name || '';
+    document.getElementById('edit-email').value = sender.linkedin_email || '';
+    document.getElementById('edit-url').value = sender.profile_url || '';
+    document.getElementById('edit-browser').value = sender.browser_profile || '';
+    document.getElementById('edit-dl').value = sender.daily_like_limit || 100;
+    document.getElementById('edit-dc').value = sender.daily_comment_limit || 50;
+    document.getElementById('edit-dcn').value = sender.daily_connect_limit || 25;
+    document.getElementById('edit-wcn').value = sender.weekly_connect_limit || 100;
+    document.getElementById('edit-wl').value = sender.weekly_like_limit || 300;
+    document.getElementById('edit-wc').value = sender.weekly_comment_limit || 200;
+    openModal('edit-sender-modal');
+}
+
+async function checkLogin(senderId) {
+    const statusEl = document.getElementById('login-status-' + senderId);
+    statusEl.innerHTML = '<span style="color: var(--lp-orange);">Checking LinkedIn session...</span>';
+    try {
+        const resp = await fetch('/senders/' + senderId + '/check-login', {method: 'POST'});
+        const data = await resp.json();
+        if (data.logged_in) {
+            statusEl.innerHTML = '<span class="badge badge-success">Logged in!</span> Session is active.';
+        } else {
+            statusEl.innerHTML = '<span class="badge badge-failed">Not logged in</span> — ' + (data.error || 'Please log in in the Chrome window');
+        }
+    } catch(e) {
+        statusEl.innerHTML = '<span class="badge badge-failed">Check failed</span> — Is the browser still open?';
+    }
+}
+
+// Auto-check login for all open browsers on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const openSenders = [{% for s in senders %}{% if s.browser_open %}{{ s.id }},{% endif %}{% endfor %}];
+    // Stagger checks so they don't all fire at once
+    openSenders.forEach(function(sid, idx) {
+        setTimeout(function() { checkLogin(sid); }, 500 + idx * 300);
+    });
+});
+</script>
+{% endblock %}

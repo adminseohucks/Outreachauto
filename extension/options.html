@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LinkedPilot Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5; color: #333; padding: 40px;
+    }
+    .container { max-width: 600px; margin: 0 auto; }
+    h1 { font-size: 24px; margin-bottom: 8px; color: #0a66c2; }
+    p.subtitle { color: #666; margin-bottom: 24px; }
+    .card {
+      background: #fff; border-radius: 12px; padding: 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;
+    }
+    .card h2 { font-size: 16px; margin-bottom: 16px; color: #0a66c2; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
+    input[type="text"], input[type="number"], input[type="password"] {
+      width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px;
+      font-size: 14px; margin-bottom: 14px; transition: border 0.2s;
+    }
+    input:focus { outline: none; border-color: #0a66c2; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    button {
+      background: #0a66c2; color: #fff; border: none; border-radius: 8px;
+      padding: 12px 24px; font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #004182; }
+    .status { margin-top: 12px; padding: 8px 12px; border-radius: 6px; font-size: 13px; display: none; }
+    .status.success { display: block; background: #e8f5e9; color: #2e7d32; }
+    .status.error { display: block; background: #fce4ec; color: #c62828; }
+    .hint { font-size: 12px; color: #888; margin-top: -10px; margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>LinkedPilot Auto Commenter</h1>
+    <p class="subtitle">Extension Settings</p>
+
+    <div class="card">
+      <h2>Dashboard Connection</h2>
+      <label>Dashboard URL</label>
+      <input type="text" id="dashboardUrl" placeholder="http://localhost:8080">
+      <p class="hint">Your LinkedPilot dashboard address (where FastAPI runs)</p>
+    </div>
+
+    <div class="card">
+      <h2>VPS AI Server (Optional Override)</h2>
+      <label>VPS Base URL</label>
+      <input type="text" id="vpsUrl" placeholder="Leave empty to auto-fetch from dashboard">
+      <p class="hint">e.g. https://your-vps-ip:8443 — leave empty to use dashboard config</p>
+
+      <label>VPS API Key</label>
+      <input type="password" id="vpsApiKey" placeholder="Leave empty to auto-fetch from dashboard">
+      <p class="hint">HMAC signing key — leave empty to use dashboard config</p>
+    </div>
+
+    <div class="card">
+      <h2>Timing Settings</h2>
+      <div class="row">
+        <div>
+          <label>Min Delay (seconds)</label>
+          <input type="number" id="minDelay" value="120" min="30">
+        </div>
+        <div>
+          <label>Max Delay (seconds)</label>
+          <input type="number" id="maxDelay" value="480" min="60">
+        </div>
+      </div>
+      <p class="hint">Random delay between each comment action (seconds)</p>
+
+      <label>Comment Tone</label>
+      <input type="text" id="commentTone" value="professional and friendly" placeholder="e.g. professional, casual, witty">
+      <p class="hint">AI will match this tone when generating comments</p>
+
+      <label>Comment Language</label>
+      <input type="text" id="commentLang" value="english" placeholder="e.g. english, hindi, hinglish">
+    </div>
+
+    <button id="saveBtn">Save Settings</button>
+    <div id="statusMsg" class="status"></div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

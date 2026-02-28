@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Comments — LinkedPilot v2{% endblock %}
+
+{% block content %}
+<hgroup>
+    <h2>Predefined Comments <small>({{ comments|length }})</small></h2>
+    <p>Manage comment templates used in campaigns</p>
+</hgroup>
+
+<button onclick="document.getElementById('add-comment-modal').classList.add('active')">+ Add Comment</button>
+
+<!-- Comment list -->
+{% if comments %}
+<div style="margin-top: 1rem;">
+    {% for c in comments %}
+    <div class="comment-item" id="comment-{{ c.id }}">
+        <div class="comment-text">
+            <p style="margin-bottom: 0.25rem;">{{ c.text }}</p>
+            <div class="comment-meta">
+                <span class="badge badge-{{ c.category if c.category in ('general','congratulations','insight','question','support') else 'draft' }}">{{ c.category }}</span>
+                &middot; Used {{ c.usage_count }} time{{ 's' if c.usage_count != 1 else '' }}
+                {% if not c.is_active %}
+                &middot; <span class="badge badge-disabled">inactive</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="action-buttons">
+            <!-- Toggle active/inactive -->
+            <form method="post" action="/comments/{{ c.id }}/toggle">
+                <button type="submit" class="outline {{ 'secondary' if c.is_active else '' }}">
+                    {{ 'Deactivate' if c.is_active else 'Activate' }}
+                </button>
+            </form>
+            <!-- Edit button -->
+            <button class="outline" onclick="openEditModal({{ c.id }}, {{ c.text | tojson }}, '{{ c.category }}')">Edit</button>
+            <!-- Delete button -->
+            <form method="post" action="/comments/{{ c.id }}/delete" onsubmit="return confirm('Delete this comment?')">
+                <button type="submit" class="outline secondary"
+                        hx-delete="/comments/{{ c.id }}"
+                        hx-confirm="Delete this comment?"
+                        hx-target="#comment-{{ c.id }}"
+                        hx-swap="outerHTML">Delete</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<article>
+    <p>No predefined comments yet. Add one to get started.</p>
+</article>
+{% endif %}
+
+<!-- Add Comment Modal -->
+<div class="modal-overlay" id="add-comment-modal">
+    <div class="modal-content">
+        <hgroup>
+            <h3>Add Comment</h3>
+            <p>Create a new predefined comment template</p>
+        </hgroup>
+        <form method="post" action="/comments/add">
+            <label>
+                Comment Text
+                <textarea name="text" rows="4" placeholder="Write your comment template..." required></textarea>
+            </label>
+            <label>
+                Category
+                <select name="category">
+                    <option value="general">General</option>
+                    <option value="congratulations">Congratulations</option>
+                    <option value="insight">Insight</option>
+                    <option value="question">Question</option>
+                    <option value="support">Support</option>
+                </select>
+            </label>
+            <fieldset class="grid">
+                <button type="submit">Add Comment</button>
+                <button type="button" class="secondary" onclick="document.getElementById('add-comment-modal').classList.remove('active')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Comment Modal -->
+<div class="modal-overlay" id="edit-comment-modal">
+    <div class="modal-content">
+        <hgroup>
+            <h3>Edit Comment</h3>
+            <p>Update the comment text</p>
+        </hgroup>
+        <form method="post" id="edit-comment-form" action="">
+            <label>
+                Comment Text
+                <textarea name="text" id="edit-comment-text" rows="4" required></textarea>
+            </label>
+            <label>
+                Category
+                <select name="category" id="edit-comment-category">
+                    <option value="general">General</option>
+                    <option value="congratulations">Congratulations</option>
+                    <option value="insight">Insight</option>
+                    <option value="question">Question</option>
+                    <option value="support">Support</option>
+                </select>
+            </label>
+            <fieldset class="grid">
+                <button type="submit">Save Changes</button>
+                <button type="button" class="secondary" onclick="document.getElementById('edit-comment-modal').classList.remove('active')">Cancel</button>
+            </fieldset>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openEditModal(commentId, commentText, category) {
+    document.getElementById('edit-comment-form').action = '/comments/' + commentId + '/edit';
+    document.getElementById('edit-comment-text').value = commentText;
+    if (category) {
+        document.getElementById('edit-comment-category').value = category;
+    }
+    document.getElementById('edit-comment-modal').classList.add('active');
+}
+</script>
+{% endblock %}
