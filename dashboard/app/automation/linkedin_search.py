@@ -1262,6 +1262,9 @@ _DOM_SCRAPE_JS = """
                             if (sib.querySelector('img, svg') && txt.length < 10) continue;
                             if (/\\d+\\s*(mutual|shared)\\s*(connection|contact)/i.test(txt)) continue;
                             if (/^\\d+(st|nd|rd|th)\\s*degree/i.test(txt)) continue;
+                            // Skip degree badges like "• 2nd", "· 3rd", "2nd", "3rd+"
+                            if (/^[\\u2022\\u00b7•·\\s]*(1st|2nd|3rd|3rd\\+)\\s*$/i.test(txt)) continue;
+                            if (/^[\\u2022\\u00b7•·]\\s*(1st|2nd|3rd)/i.test(txt)) continue;
                             subtitleTexts.push(txt);
                         }
                         _el = _par;
@@ -1288,6 +1291,9 @@ _DOM_SCRAPE_JS = """
                         if (tL === nameLow) continue;
                         if (NOISE.has(tL)) continue;
                         if (/^(1st|2nd|3rd|3rd\\+|\\d+(st|nd|rd|th)\\+?)$/i.test(t)) continue;
+                        // Skip degree badges with bullet: "• 2nd", "· 3rd"
+                        if (/^[\\u2022\\u00b7•·\\s]*(1st|2nd|3rd|3rd\\+)\\s*$/i.test(t)) continue;
+                        if (/^[\\u2022\\u00b7•·]\\s*(1st|2nd|3rd)/i.test(t)) continue;
                         if (/^(Connect|Follow|Message|Send|View|Pending|Save|Dismiss)/i.test(t)) continue;
                         if (tL.includes(nameLow) && tL.length < nameLow.length + 5) continue;
                         if (/\\d+\\s*(mutual|shared)\\s*(connection|contact)/i.test(t)) continue;
@@ -1301,6 +1307,10 @@ _DOM_SCRAPE_JS = """
                 if (headline) {
                     headline = headline.replace(/^(Current|Formerly|Previously):\\s*/i, '').trim();
                 }
+                // Final cleanup: discard headline/location if it's just a degree badge
+                const isDegree = (s) => s && /^[\\u2022\\u00b7•·\\s]*(1st|2nd|3rd|3rd\\+)?[\\s·•]*$/i.test(s);
+                if (isDegree(headline)) headline = '';
+                if (isDegree(location)) location = '';
 
                 // Sanity check: swap if headline looks like location & vice versa
                 const looksLikeLoc = (s) => s && s.length < 45 &&
