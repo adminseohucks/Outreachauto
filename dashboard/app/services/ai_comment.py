@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 
 # ── Post-type detection ──────────────────────────────────────────────────────
 
-# Patterns that indicate a post should be SKIPPED (not commented on)
-_SKIP_PATTERNS: list[re.Pattern] = [
+# Patterns that indicate a hiring/recruitment post
+_HIRING_PATTERNS: list[re.Pattern] = [
     re.compile(p, re.IGNORECASE) for p in [
         r"\b(we'?re|is|are)\s+hiring\b",
         r"\bjob\s+(opening|opportunity|posting|alert|vacancy)\b",
@@ -43,22 +43,79 @@ _SKIP_PATTERNS: list[re.Pattern] = [
     ]
 ]
 
+# Regexes to extract company name from hiring posts (tried in order)
+_COMPANY_EXTRACTORS: list[re.Pattern] = [
+    # "CompanyName is hiring" / "CompanyName is currently looking"
+    re.compile(r"^(.+?)\s+is\s+(?:hiring|currently\s+looking)", re.IGNORECASE),
+    # "Hiring at CompanyName" / "We're hiring at CompanyName"
+    re.compile(r"hiring\s+(?:at|for)\s+([A-Z][A-Za-z0-9\s&.'-]+?)(?:\s*[!.,;:?]|\s+(?:we|for|and|to)\b|$)", re.IGNORECASE),
+    # "Join CompanyName" / "Join our team at CompanyName"
+    re.compile(r"join\s+(?:us\s+at|our\s+team\s+at|the\s+team\s+at)\s+([A-Z][A-Za-z0-9\s&.'-]+?)(?:\s*[!.,;:?]|$)", re.IGNORECASE),
+    # "at CompanyName" — generic fallback
+    re.compile(r"\bat\s+([A-Z][A-Za-z0-9\s&.'-]{2,40}?)(?:\s*[!.,;:?]|\s+(?:is|we|and|for|as|in)\b|$)"),
+]
 
-def should_skip_post(post_text: str) -> Tuple[bool, str]:
-    """Check if a post should be skipped (hiring, recruitment, spam, etc.).
+
+def detect_hiring_post(post_text: str) -> Tuple[bool, str]:
+    """Detect if a post is hiring/recruitment and extract company name.
 
     Returns:
-        (should_skip: bool, reason: str)
+        (is_hiring: bool, company_name: str)
     """
     if not post_text:
         return False, ""
 
-    for pattern in _SKIP_PATTERNS:
-        m = pattern.search(post_text)
-        if m:
-            return True, f"hiring/recruitment post (matched: '{m.group()}')"
+    is_hiring = False
+    for pattern in _HIRING_PATTERNS:
+        if pattern.search(post_text):
+            is_hiring = True
+            break
 
-    return False, ""
+    if not is_hiring:
+        return False, ""
+
+    # Try to extract company name
+    for extractor in _COMPANY_EXTRACTORS:
+        m = extractor.search(post_text)
+        if m:
+            company = m.group(1).strip().rstrip(".")
+            # Sanity: skip if too short or too long
+            if 2 <= len(company) <= 50:
+                return True, company
+
+    return True, ""
+
+
+def _company_to_hashtag(company_name: str) -> str:
+    """Convert company name to hashtag format (no spaces).
+
+    'Valor Behavioral Health' → 'ValorBehavioralHealth'
+    'TechCorp Solutions'      → 'TechCorpSolutions'
+    """
+    if not company_name:
+        return ""
+    # Remove non-alphanumeric chars except spaces
+    clean = re.sub(r"[^a-zA-Z0-9\s]", "", company_name)
+    # PascalCase: ensure first letter uppercase, preserve rest of original case
+    parts = clean.split()
+    return "".join((word[0].upper() + word[1:]) if word else "" for word in parts)
+
+
+def generate_hiring_comment(post_text: str) -> str:
+    """Generate a #hiring #CompanyName comment for a hiring post.
+
+    Examples:
+        '#hiring #ValorBehavioralHealth'
+        '#hiring #Google'
+        '#hiring'  (if company can't be extracted)
+    """
+    _, company = detect_hiring_post(post_text)
+
+    if company:
+        hashtag = _company_to_hashtag(company)
+        if hashtag:
+            return f"#hiring #{hashtag}"
+    return "#hiring"
 
 
 def _sign_request(timestamp: str, body: str) -> str:

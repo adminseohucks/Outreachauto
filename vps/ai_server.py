@@ -195,6 +195,21 @@ def _parse_ollama_index(response_text: str, num_comments: int) -> int | None:
     return None
 
 
+def _is_hiring_post(post_text: str) -> bool:
+    """Quick check if a post is about hiring/recruitment."""
+    import re
+    hiring_keywords = [
+        r"\b(we'?re|is|are)\s+hiring\b", r"\bjob\s+(opening|opportunity)\b",
+        r"\bapply\s+(now|here|today)\b", r"\bjoin\s+our\s+team\b",
+        r"\bnow\s+hiring\b", r"\bcurrently\s+hiring\b", r"\b#hiring\b",
+        r"\b(vacancy|recruitment)\b", r"\blooking\s+to\s+(fill|hire)\b",
+    ]
+    for kw in hiring_keywords:
+        if re.search(kw, post_text, re.IGNORECASE):
+            return True
+    return False
+
+
 def _build_generate_prompt(
     post_text: str,
     post_author: str,
@@ -204,6 +219,22 @@ def _build_generate_prompt(
     language: str,
 ) -> str:
     """Build a prompt for generating an original LinkedIn comment."""
+
+    # Special prompt for hiring posts: just extract company and return hashtags
+    if _is_hiring_post(post_text):
+        return (
+            "This is a LinkedIn hiring/recruitment post. "
+            "Your task: extract the company name from the post and reply with EXACTLY "
+            "two hashtags: #hiring #CompanyName (company name without spaces, CamelCase).\n"
+            "Examples:\n"
+            '- Post: "Google is hiring..." → #hiring #Google\n'
+            '- Post: "Valor Behavioral Health is hiring..." → #hiring #ValorBehavioralHealth\n'
+            '- Post: "We\'re hiring at TechCorp Solutions" → #hiring #TechCorpSolutions\n\n'
+            "Reply with ONLY the two hashtags, nothing else.\n\n"
+            f"Post:\n{post_text}\n\n"
+            "Your comment:"
+        )
+
     existing_section = ""
     if existing_comments:
         numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(existing_comments))

@@ -116,7 +116,7 @@ async def _execute_action(action: dict) -> bool:
             comment_on_latest_post,
             extract_post_text,
         )
-        from app.services.ai_comment import should_skip_post
+        from app.services.ai_comment import detect_hiring_post, generate_hiring_comment
 
         comment_text = action.get("comment_text", "")
 
@@ -150,36 +150,38 @@ async def _execute_action(action: dict) -> bool:
                 )
                 return False
 
-            # 1b. Check if post should be skipped (hiring, recruitment, etc.)
-            skip, skip_reason = should_skip_post(post_text)
-            if skip:
+            # 1b. Check if hiring post → use #hiring #CompanyName comment
+            is_hiring, hiring_company = detect_hiring_post(post_text)
+            if is_hiring:
+                comment_text = generate_hiring_comment(post_text)
                 logger.info(
-                    "SKIPPING comment action %s on %s — %s",
-                    action.get("id"), profile_url, skip_reason,
+                    "Hiring post detected → comment: %s (company: %s)",
+                    comment_text, hiring_company or "unknown",
                 )
-                print(f"  [Comment] SKIPPED: {skip_reason} — {profile_url}")
-                return False
-
-            # 2. Ask AI to generate an original comment
-            ai_result = await generate_ai_comment(
-                post_text=post_text,
-                existing_comments=existing_comments,
-                tone="professional",
-            )
-            comment_text = ai_result.get("comment_text", "")
-            confidence = ai_result.get("confidence", 0.0)
-
-            if not comment_text:
-                logger.error(
-                    "AI failed to generate comment for action %s", action.get("id")
+                print(
+                    f"  [Comment] HIRING POST → {comment_text} — {profile_url}"
                 )
-                return False
+            else:
+                # 2. Ask AI to generate an original comment
+                ai_result = await generate_ai_comment(
+                    post_text=post_text,
+                    existing_comments=existing_comments,
+                    tone="professional",
+                )
+                comment_text = ai_result.get("comment_text", "")
+                confidence = ai_result.get("confidence", 0.0)
 
-            logger.info(
-                "AI generated comment (confidence=%.2f): %.80s...",
-                confidence,
-                comment_text,
-            )
+                if not comment_text:
+                    logger.error(
+                        "AI failed to generate comment for action %s", action.get("id")
+                    )
+                    return False
+
+                logger.info(
+                    "AI generated comment (confidence=%.2f): %.80s...",
+                    confidence,
+                    comment_text,
+                )
 
             # 3. Save the generated comment to action_queue
             db = await get_lp_db()
