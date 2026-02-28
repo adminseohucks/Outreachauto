@@ -1,5 +1,6 @@
 """LinkedPilot v2 — Sender management router."""
 
+import logging
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -8,8 +9,12 @@ from app.config import TEMPLATES_DIR
 from app.database import get_lp_db
 from app.automation.browser import browser_manager, extension_chrome
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# In-memory error store for sender operations (shown once then cleared)
+_sender_errors: dict[int, str] = {}
 
 
 @router.get("/senders", response_class=HTMLResponse)
@@ -31,9 +36,12 @@ async def senders_page(request: Request):
         pages_by_sender.setdefault(page["sender_id"], []).append(page)
 
     for sender in senders:
-        sender["browser_open"] = browser_manager.is_open(sender["id"])
-        sender["extension_chrome_open"] = extension_chrome.is_open(sender["id"])
-        sender["company_pages"] = pages_by_sender.get(sender["id"], [])
+        sid = sender["id"]
+        sender["browser_open"] = browser_manager.is_open(sid)
+        sender["extension_chrome_open"] = extension_chrome.is_open(sid)
+        sender["company_pages"] = pages_by_sender.get(sid, [])
+        # Pop error so it's shown once then cleared
+        sender["error"] = _sender_errors.pop(sid, "")
 
     return templates.TemplateResponse("senders.html", {
         "request": request,
@@ -194,9 +202,8 @@ async def login_sender(request: Request, sender_id: int):
     try:
         await browser_manager.open_for_login(sender_id, profile_dir)
     except Exception as e:
-        # Log the error but don't crash
-        import logging
-        logging.getLogger(__name__).error("Failed to open browser for sender %s: %s", sender_id, e)
+        _sender_errors[sender_id] = f"Browser open failed: {e}"
+        logger.error("Failed to open browser for sender %s: %s", sender_id, e)
 
     return RedirectResponse(url="/senders", status_code=303)
 
@@ -228,10 +235,8 @@ async def open_extension_chrome(request: Request, sender_id: int):
     """
     ok = extension_chrome.open(sender_id)
     if not ok:
-        import logging
-        logging.getLogger(__name__).error(
-            "Failed to open extension Chrome for sender %s", sender_id
-        )
+        _sender_errors[sender_id] = "Extension Chrome failed — Chrome executable not found"
+        logger.error("Failed to open extension Chrome for sender %s", sender_id)
     return RedirectResponse(url="/senders", status_code=303)
 
 

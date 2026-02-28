@@ -49,6 +49,13 @@
             <span>Connects: {{ s.connects_today or 0 }}/{{ s.daily_connect_limit or 25 }}</span>
         </div>
 
+        <!-- Error display (shown once) -->
+        {% if s.error %}
+        <div style="margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: #fee2e2; border-radius: 6px; font-size: 0.8rem; color: #dc2626; border-left: 3px solid #dc2626;">
+            <strong>Error:</strong> {{ s.error }}
+        </div>
+        {% endif %}
+
         <!-- LinkedIn Login Section -->
         <div style="margin-top: 0.75rem; padding: 0.75rem; background: {% if s.browser_open %}#dbeafe{% else %}#f3f4f6{% endif %}; border-radius: 8px;">
             {% if s.browser_open %}
@@ -340,13 +347,22 @@ async function checkLogin(senderId) {
         const resp = await fetch('/senders/' + senderId + '/check-login', {method: 'POST'});
         const data = await resp.json();
         if (data.logged_in) {
-            statusEl.innerHTML = '<span class="badge badge-success">Logged in!</span> ' + (data.name ? '(' + data.name + ')' : 'Session is active.');
+            statusEl.innerHTML = '<span class="badge badge-success">Logged in!</span> Session is active.';
         } else {
-            statusEl.innerHTML = '<span class="badge badge-failed">Not logged in</span> -- ' + (data.error || 'Please log in in the Chrome window');
+            statusEl.innerHTML = '<span class="badge badge-failed">Not logged in</span> — ' + (data.error || 'Please log in in the Chrome window');
         }
     } catch(e) {
-        statusEl.innerHTML = '<span class="badge badge-failed">Check failed</span> -- Is the browser still open?';
+        statusEl.innerHTML = '<span class="badge badge-failed">Check failed</span> — Is the browser still open?';
     }
 }
+
+// Auto-check login for all open browsers on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const openSenders = [{% for s in senders %}{% if s.browser_open %}{{ s.id }},{% endif %}{% endfor %}];
+    // Stagger checks so they don't all fire at once
+    openSenders.forEach(function(sid, idx) {
+        setTimeout(function() { checkLogin(sid); }, 500 + idx * 300);
+    });
+});
 </script>
 {% endblock %}

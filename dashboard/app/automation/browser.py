@@ -5,6 +5,7 @@ Each sender gets its own persistent browser context so LinkedIn sessions
 are completely independent (cookies, local-storage, etc.).
 """
 
+import asyncio
 import logging
 import os
 import platform
@@ -115,6 +116,25 @@ class BrowserManager:
         """Check if a browser context is open for this sender."""
         return sender_id in self._contexts
 
+    async def health_check(self, sender_id: int) -> bool:
+        """Quick check if browser context is still alive and responsive."""
+        ctx = self._contexts.get(sender_id)
+        if ctx is None:
+            return False
+        try:
+            pages = ctx.pages
+            if pages:
+                # Run a trivial JS eval — throws if browser process died
+                await asyncio.wait_for(
+                    pages[0].evaluate("() => true"),
+                    timeout=5.0,
+                )
+            return True
+        except Exception:
+            self._contexts.pop(sender_id, None)
+            logger.warning("Browser context for sender %s is dead — removed", sender_id)
+            return False
+
     async def open_for_login(self, sender_id: int, profile_dir: str) -> None:
         """Open browser and navigate to LinkedIn login page.
 
@@ -133,6 +153,7 @@ class BrowserManager:
         """Check if the sender is logged into LinkedIn.
 
         Returns dict with 'logged_in' (bool) and 'name' (str if logged in).
+        Fast path: checks current URL first before navigating.
         """
         if sender_id not in self._contexts:
             return {"logged_in": False, "error": "Browser not open"}
@@ -141,19 +162,20 @@ class BrowserManager:
             page = await self.get_page(sender_id)
             current_url = page.url
 
-            # If we're on the feed or any non-login page, we're logged in
-            if "feed" in current_url or "mynetwork" in current_url or "messaging" in current_url:
-                # Try to get the user's name
-                try:
-                    name_el = await page.query_selector(".feed-identity-module__actor-meta a")
-                    name = await name_el.inner_text() if name_el else ""
-                except Exception:
-                    name = ""
-                return {"logged_in": True, "name": name}
+            # Fast path: if already on a LinkedIn app page, we're logged in
+            if any(x in current_url for x in (
+                "/feed", "/mynetwork", "/messaging", "/search", "/in/",
+                "/notifications", "/jobs",
+            )):
+                return {"logged_in": True, "name": ""}
 
-            # Navigate to feed to check
+            # If clearly on login/checkpoint, not logged in
+            if "login" in current_url or "checkpoint" in current_url:
+                return {"logged_in": False, "error": "Not logged in"}
+
+            # Navigate to feed to check (reduced wait)
             await page.goto("https://www.linkedin.com/feed/", timeout=15000)
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(1000)
 
             final_url = page.url
             if "login" in final_url or "checkpoint" in final_url:
