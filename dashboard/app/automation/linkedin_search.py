@@ -394,17 +394,44 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
     }
 
     // Clean keywords: normalize whitespace but PRESERVE quotes for boolean search
-    // LinkedIn supports: "exact phrase", OR, AND, NOT, () operators
     const cleanKeywords = keywords.replace(/\\s+/g, ' ').trim();
-    const keywordsPart = cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '';
     const filtersStr = filtersList || '(key:resultType,value:List(PEOPLE))';
 
-    // --- GraphQL endpoint (primary) ---
-    const variables = '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
-        'query:(' + keywordsPart +
+    // --- Build MULTIPLE variable formats (LinkedIn changes format periodically) ---
+    // IMPORTANT: LinkedIn ROST-style variables do NOT use URL-encoding for values.
+    // Keywords with spaces are passed as-is (e.g., keywords:Financial Analyst).
+    const variableFormats = [];
+
+    // Format 1 (2025-2026 — with count, no encodeURIComponent)
+    variableFormats.push(
+        '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
+        'query:(' +
+        (cleanKeywords ? 'keywords:' + cleanKeywords + ',' : '') +
         'flagshipSearchIntent:SEARCH_SRP,' +
         'queryParameters:List(' + filtersStr + '),' +
-        'includeFiltersInResponse:false))';
+        'includeFiltersInResponse:false),' +
+        'count:' + count + ')'
+    );
+
+    // Format 2 (count outside query, at top level)
+    variableFormats.push(
+        '(count:' + count + ',start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
+        'query:(' +
+        (cleanKeywords ? 'keywords:' + cleanKeywords + ',' : '') +
+        'flagshipSearchIntent:SEARCH_SRP,' +
+        'queryParameters:List(' + filtersStr + '),' +
+        'includeFiltersInResponse:false))'
+    );
+
+    // Format 3 (original format without count — some hashes may still accept this)
+    variableFormats.push(
+        '(start:' + start + ',origin:GLOBAL_SEARCH_HEADER,' +
+        'query:(' +
+        (cleanKeywords ? 'keywords:' + cleanKeywords + ',' : '') +
+        'flagshipSearchIntent:SEARCH_SRP,' +
+        'queryParameters:List(' + filtersStr + '),' +
+        'includeFiltersInResponse:false))'
+    );
 
     // List of queryId hashes to try (dynamic first, then known hashes)
     const queryIds = [];
@@ -426,50 +453,71 @@ async ({ keywords, start, count, filtersList, dynamicQueryId }) => {
     };
 
     let lastError = '';
+    let attempts = 0;
 
-    // Try each queryId hash (with 15s timeout per request)
+    // Try each queryId + each variable format combination
     for (const qid of queryIds) {
-        const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' + variables + '&queryId=' + qid;
-        try {
-            const resp = await fetchWithTimeout(url, { headers, credentials: 'include' });
-            if (resp.ok) {
-                const data = await resp.json();
-                data._usedQueryId = qid;
-                return data;
+        for (const variables of variableFormats) {
+            attempts++;
+            const url = 'https://www.linkedin.com/voyager/api/graphql?variables=' +
+                encodeURIComponent(variables) + '&queryId=' + qid;
+            try {
+                const resp = await fetchWithTimeout(url, { headers, credentials: 'include' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    data._usedQueryId = qid;
+                    data._usedFormat = attempts;
+                    return data;
+                }
+                lastError = 'qid ' + qid.split('.')[1].substring(0,8) + ' fmt' + (variableFormats.indexOf(variables)+1) + ' → ' + resp.status;
+            } catch (e) {
+                lastError = e.name === 'AbortError' ? 'timeout' : e.message;
             }
-            let body = '';
-            try { body = await resp.text(); } catch(e) {}
-            lastError = 'queryId ' + qid.split('.')[1].substring(0,8) + '... returned ' + resp.status;
-        } catch (e) {
-            lastError = e.name === 'AbortError' ? 'Request timed out (15s)' : e.message;
         }
     }
 
-    // --- REST endpoint fallback ---
-    try {
-        const restFilters = filtersStr;
-        const restQuery = '(flagshipSearchIntent:SEARCH_SRP,' +
+    // --- REST endpoint fallback (also try with and without encodeURIComponent) ---
+    const restQueries = [
+        // Format A: keywords NOT encoded
+        '(flagshipSearchIntent:SEARCH_SRP,' +
+            (cleanKeywords ? 'keywords:' + cleanKeywords + ',' : '') +
+            'queryParameters:List(' + filtersStr + '))',
+        // Format B: keywords encoded
+        '(flagshipSearchIntent:SEARCH_SRP,' +
             (cleanKeywords ? 'keywords:' + encodeURIComponent(cleanKeywords) + ',' : '') +
-            'queryParameters:List(' + restFilters + '))';
-        const restUrl = 'https://www.linkedin.com/voyager/api/search/dash/clusters?' +
-            'decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175' +
-            '&origin=GLOBAL_SEARCH_HEADER&q=all' +
-            '&query=' + restQuery +
-            '&start=' + start + '&count=' + count;
-        const resp = await fetchWithTimeout(restUrl, { headers, credentials: 'include' });
-        if (resp.ok) {
-            const data = await resp.json();
-            data._usedEndpoint = 'REST';
-            return data;
+            'queryParameters:List(' + filtersStr + '))',
+    ];
+
+    for (const restQuery of restQueries) {
+        try {
+            // Try multiple decoration IDs (LinkedIn rotates these too)
+            const decoIds = [
+                'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175',
+                'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-174',
+                'com.linkedin.voyager.dash.deco.search.SearchClusterCollection-176',
+            ];
+            for (const decoId of decoIds) {
+                const restUrl = 'https://www.linkedin.com/voyager/api/search/dash/clusters?' +
+                    'decorationId=' + decoId +
+                    '&origin=GLOBAL_SEARCH_HEADER&q=all' +
+                    '&query=' + encodeURIComponent(restQuery) +
+                    '&start=' + start + '&count=' + count;
+                const resp = await fetchWithTimeout(restUrl, { headers, credentials: 'include' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    data._usedEndpoint = 'REST';
+                    return data;
+                }
+                lastError = 'REST decoId ' + decoId.slice(-3) + ' → ' + resp.status;
+            }
+        } catch(e) {
+            lastError += '; REST: ' + (e.name === 'AbortError' ? 'timeout' : e.message);
         }
-        lastError += '; REST fallback returned ' + resp.status;
-    } catch(e) {
-        lastError += '; REST: ' + (e.name === 'AbortError' ? 'timeout' : e.message);
     }
 
     return {
         error: 'All search endpoints failed. LinkedIn may have updated their API. Last: ' + lastError,
-        debugInfo: 'Tried ' + queryIds.length + ' GraphQL hashes + REST fallback'
+        debugInfo: 'Tried ' + queryIds.length + ' hashes x ' + variableFormats.length + ' formats + REST fallback (' + attempts + ' total attempts)'
     };
 }
 """
@@ -506,10 +554,11 @@ async (vanityName) => {
 
 
 # ---------------------------------------------------------------------------
-# Module-level cache for captured queryId so we don't re-navigate every time.
+# Module-level cache for captured queryId and URL template.
 # Reset on import (server restart).
 # ---------------------------------------------------------------------------
 _cached_query_id: str | None = None
+_cached_variables_template: str | None = None  # Full variables string from live request
 
 
 async def capture_query_id_via_navigation(page: Page) -> str | None:
@@ -519,11 +568,11 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
     1. Return cached queryId (if we have one from a previous call).
     2. JS extraction from current page (no navigation).
     3. Network interception: do a real search bar click on LinkedIn and
-       capture the GraphQL request queryId from the network traffic.
+       capture the GraphQL request queryId AND variables format.
 
     Returns the full queryId string or None.
     """
-    global _cached_query_id
+    global _cached_query_id, _cached_variables_template
     if _cached_query_id:
         logger.info("Using cached queryId: %s", _cached_query_id)
         print(f"  [Search] Using cached queryId: {_cached_query_id[:40]}...")
@@ -540,18 +589,18 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
     except Exception as exc:
         logger.warning("JS queryId extraction failed: %s", exc)
 
-    # Strategy 2: Network interception — briefly listen for GraphQL requests
-    # while triggering a search via the LinkedIn search bar
+    # Strategy 2: Network interception — capture FULL URL (queryId + variables format)
     try:
-        captured = {"qid": None}
+        captured = {"qid": None, "full_url": None}
 
         async def _intercept(route):
             url = route.request.url
-            if "voyagerSearchDashClusters" in url:
+            if "voyagerSearchDashClusters" in url or "searchDash" in url:
                 import re
                 match = re.search(r'queryId=(voyagerSearchDashClusters\.[a-f0-9]+)', url)
                 if match:
                     captured["qid"] = match.group(1)
+                    captured["full_url"] = url
             await route.continue_()
 
         await page.route("**/voyager/api/graphql*", _intercept)
@@ -566,7 +615,7 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
             await page.keyboard.press("Enter")
             # Wait briefly for the network request
             await page.wait_for_timeout(4000)
-            # Clear the search
+            # Navigate back to feed
             await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=10000)
             await page.wait_for_timeout(1000)
 
@@ -574,6 +623,14 @@ async def capture_query_id_via_navigation(page: Page) -> str | None:
 
         if captured["qid"]:
             _cached_query_id = captured["qid"]
+            # Extract the variables= portion to understand current format
+            if captured["full_url"]:
+                import re
+                vmatch = re.search(r'variables=([^&]+)', captured["full_url"])
+                if vmatch:
+                    _cached_variables_template = vmatch.group(1)
+                    logger.info("Captured live variables format: %s", _cached_variables_template[:100])
+                    print(f"  [Search] Captured live URL format for reference")
             logger.info("Captured live queryId via network intercept: %s", captured["qid"])
             print(f"  [Search] Captured live queryId: {captured['qid'][:40]}...")
             return captured["qid"]
