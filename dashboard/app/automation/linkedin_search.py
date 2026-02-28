@@ -1248,68 +1248,92 @@ _DOM_SCRAPE_JS = """
             if (!fullName) continue;
 
             // ---- Extract headline & location from the card ----
-            // LinkedIn search cards show data in order: Name → Headline → Location
-            // We collect all meaningful text blocks from the card and assign them
-            // in order, skipping the name and UI elements.
             let headline = '';
             let location = '';
 
             if (card) {
-                // Gather all distinct text blocks in the card in DOM order
-                const textBlocks = [];
-                const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null);
-                let node;
-                while (node = walker.nextNode()) {
-                    const t = node.textContent.trim();
-                    if (t && t.length > 1) textBlocks.push(t);
+                // STRATEGY 1: Direct CSS class selectors (most reliable)
+                // LinkedIn uses 'entity-result__primary-subtitle' for headline
+                // and 'entity-result__secondary-subtitle' for location.
+                const pSub = card.querySelector('[class*="entity-result__primary-subtitle"]');
+                const sSub = card.querySelector('[class*="entity-result__secondary-subtitle"]');
+                if (pSub) headline = pSub.textContent.trim();
+                if (sSub) location = sSub.textContent.trim();
+
+                // STRATEGY 2: Structural navigation from name link.
+                // Walk outward from <a> tag, collecting text from sibling
+                // DIV/P elements (skip inline SPANs that hold badges).
+                // LinkedIn layout: contentArea > nameBlock(link + headlineDiv)
+                //                             > locationDiv > snippetP
+                if (!headline && !location) {
+                    const subtitleTexts = [];
+                    let _el = link;
+                    while (_el && _el !== card) {
+                        const _par = _el.parentElement;
+                        if (!_par) break;
+                        for (const sib of _par.children) {
+                            if (sib === _el || sib.contains(link)) continue;
+                            const tag = sib.tagName;
+                            if (tag !== 'DIV' && tag !== 'P' && tag !== 'SECTION') continue;
+                            const txt = sib.textContent.trim();
+                            if (!txt || txt.length < 3) continue;
+                            if (/^(Connect|Follow|Message|Send|Pending|Save|Dismiss)/i.test(txt)) continue;
+                            if (sib.querySelector('button:not([aria-hidden]), [role="button"]')) continue;
+                            if (sib.querySelector('img, svg') && txt.length < 10) continue;
+                            if (/\\d+\\s*(mutual|shared)\\s*(connection|contact)/i.test(txt)) continue;
+                            if (/^\\d+(st|nd|rd|th)\\s*degree/i.test(txt)) continue;
+                            subtitleTexts.push(txt);
+                        }
+                        _el = _par;
+                    }
+                    if (subtitleTexts.length >= 1) headline = subtitleTexts[0];
+                    if (subtitleTexts.length >= 2) location = subtitleTexts[1];
                 }
 
-                // Filter out noise: name, degree badges, buttons, dots
-                const NOISE = new Set([
-                    'connect', 'follow', 'message', 'send', 'inmail', 'pending',
-                    '1st', '2nd', '3rd', '3rd+', '·', '|', '-', '–', '—', '...', '•',
-                    'view profile', 'view full profile', 'send inmail',
-                ]);
-                const nameLower = fullName.toLowerCase();
-                const nameFirst = fullName.split(' ')[0].toLowerCase();
-                const nameLast = fullName.split(' ').slice(-1)[0].toLowerCase();
-
-                const meaningful = [];
-                for (const t of textBlocks) {
-                    const tLower = t.toLowerCase().trim();
-                    // Skip exact name matches
-                    if (tLower === nameLower) continue;
-                    // Skip just first name or last name alone
-                    if (tLower === nameFirst || tLower === nameLast) continue;
-                    // Skip noise words
-                    if (NOISE.has(tLower)) continue;
-                    // Skip degree badges
-                    if (SKIP_PATTERNS.test(t)) continue;
-                    // Skip very short fragments (single chars, bullets)
-                    if (t.length < 3) continue;
-                    // Skip button-like text
-                    if (/^(Connect|Follow|Message|Send|View|Pending|Accept|Decline|Ignore)/i.test(t)) continue;
-                    // Skip if it contains the full name (duplicate)
-                    if (tLower.includes(nameLower) && tLower.length < nameLower.length + 5) continue;
-                    meaningful.push(t);
-                }
-
-                // LinkedIn shows: Headline first, then Location underneath.
-                // Headline is typically the job title/description (longer text).
-                // Location is typically "City, Country" or "Area Name" (shorter, has comma).
-                // Assign in order: first meaningful = headline, next = location.
-                for (const t of meaningful) {
-                    if (!headline) {
-                        headline = t;
-                    } else if (!location) {
-                        location = t;
-                        break;  // We have both, stop
+                // STRATEGY 3: TreeWalker fallback (improved filtering)
+                if (!headline && !location) {
+                    const textBlocks = [];
+                    const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null);
+                    let _n;
+                    while (_n = walker.nextNode()) {
+                        const t = _n.textContent.trim();
+                        if (t && t.length > 1) textBlocks.push(t);
+                    }
+                    const NOISE = new Set([
+                        'connect', 'follow', 'message', 'send', 'inmail', 'pending',
+                        '1st', '2nd', '3rd', '3rd+', '·', '|', '-', '–', '—', '...', '•',
+                        'view profile', 'view full profile', 'send inmail',
+                    ]);
+                    const nameLower = fullName.toLowerCase();
+                    const nameFirst = fullName.split(' ')[0].toLowerCase();
+                    const nameLast = fullName.split(' ').slice(-1)[0].toLowerCase();
+                    const meaningful = [];
+                    for (const t of textBlocks) {
+                        const tLow = t.toLowerCase().trim();
+                        if (tLow === nameLower) continue;
+                        if (tLow === nameFirst || tLow === nameLast) continue;
+                        if (NOISE.has(tLow)) continue;
+                        if (SKIP_PATTERNS.test(t)) continue;
+                        if (t.length < 3) continue;
+                        if (/^(Connect|Follow|Message|Send|View|Pending|Accept|Decline|Ignore|Save|Dismiss)/i.test(t)) continue;
+                        if (tLow.includes(nameLower) && tLow.length < nameLower.length + 5) continue;
+                        if (/\\d+\\s*(mutual|shared)\\s*(connection|contact)/i.test(t)) continue;
+                        if (/^\\d+(st|nd|rd|th)\\s*degree/i.test(t)) continue;
+                        meaningful.push(t);
+                    }
+                    for (const t of meaningful) {
+                        if (!headline) { headline = t; }
+                        else if (!location) { location = t; break; }
                     }
                 }
 
-                // Sanity check: if headline looks like a location and location looks
-                // like a headline, swap them
-                const looksLikeLocation = (s) => {
+                // Clean up snippet prefixes that may leak into headline
+                if (headline) {
+                    headline = headline.replace(/^(Current|Formerly|Previously):\\s*/i, '').trim();
+                }
+
+                // Sanity check: swap if headline looks like location & vice versa
+                const looksLikeLoc = (s) => {
                     if (!s) return false;
                     return (
                         s.length < 45 &&
@@ -1317,12 +1341,11 @@ _DOM_SCRAPE_JS = """
                         !/\\b(at|@|CEO|Founder|Manager|Director|Engineer|Analyst|Officer|Lead|Head)\\b/i.test(s)
                     );
                 };
-                const looksLikeHeadline = (s) => {
+                const looksLikeHl = (s) => {
                     if (!s) return false;
-                    return /\\b(at|@|CEO|Founder|Manager|Director|Engineer|Analyst|Officer|Lead|Head|President|VP|CTO|CFO|COO)\\b/i.test(s);
+                    return /\\b(at|@|CEO|Founder|Manager|Director|Engineer|Analyst|Officer|Lead|Head|President|VP|CTO|CFO|COO|Entrepreneur)\\b/i.test(s);
                 };
-
-                if (headline && location && looksLikeLocation(headline) && looksLikeHeadline(location)) {
+                if (headline && location && looksLikeLoc(headline) && looksLikeHl(location)) {
                     [headline, location] = [location, headline];
                 }
             }
@@ -1358,7 +1381,7 @@ _DOM_SCRAPE_JS = """
                 if (seenUrls.has(profileUrl)) continue;
 
                 // Find name, skipping degree badges
-                const degreeRe = /^(1st|2nd|3rd|3rd\+|\d+(st|nd|rd|th)\+?|·|\|)$/i;
+                const degreeRe = /^(1st|2nd|3rd|3rd\\+|\\d+(st|nd|rd|th)\\+?|·|\\|)$/i;
                 let fullName = '';
                 const spans = link.querySelectorAll('span[aria-hidden="true"], span');
                 for (const sp of spans) {
